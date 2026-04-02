@@ -1,0 +1,65 @@
+{
+  "name": "excel-ai-analyzer",
+  "version": "1.0.0",
+  "description": "Local AI-powered Excel and CSV analyzer — 100% private, no internet required",
+  "author": "Excel AI Analyzer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "com.excelai.analyzer",
+    "productName": "Excel AI Analyzer",
+    "copyright": "Copyright © 2025",
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "first-run.html",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/server",
+        "to": "backend/dist/server",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "frontend",
+        "to": "frontend",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "ollama",
+        "to": "ollama",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}

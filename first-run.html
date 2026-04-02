@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Excel AI Analyzer — Setup</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d0f14;
+      --surface:  #151820;
+      --border:   #1e2330;
+      --border2:  #2a3045;
+      --accent:   #5b8cff;
+      --accent2:  #a78bfa;
+      --green:    #34d399;
+      --red:      #f87171;
+      --yellow:   #fbbf24;
+      --text:     #dde3ef;
+      --muted:    #505870;
+      --muted2:   #7a859c;
+      --mono:     'DM Mono', monospace;
+      --sans:     'DM Sans', system-ui, sans-serif;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg); color: var(--text);
+      font-family: var(--sans);
+      overflow: hidden; user-select: none;
+      -webkit-app-region: drag;
+    }
+
+    body::before {
+      content: ''; position: fixed; inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 40px 40px; opacity: 0.25; pointer-events: none;
+    }
+
+    /* ── Screen system ── */
+    .screen {
+      display: none; width: 100%; height: 100%;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 32px 40px; position: absolute; inset: 0;
+    }
+    .screen.active { display: flex; }
+
+    /* ── Shared header ── */
+    .logo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .logo-box {
+      width: 38px; height: 38px; border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      display: flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+    .app-name { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+    .subtitle { font-size: 12px; color: var(--muted2); margin-bottom: 28px; text-align: center; }
+
+    /* ── Step indicator ── */
+    .steps {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 28px;
+    }
+    .step {
+      display: flex; align-items: center; gap: 6px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+    }
+    .step-dot {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 1.5px solid var(--muted);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 600;
+    }
+    .step.active .step-dot { border-color: var(--accent); color: var(--accent); }
+    .step.active { color: var(--text); }
+    .step.done .step-dot { border-color: var(--green); background: var(--green); color: #0d1a12; }
+    .step-line { width: 32px; height: 1px; background: var(--border2); }
+
+    /* ── Ollama screen ── */
+    .ollama-card {
+      width: 100%; max-width: 520px;
+      background: var(--surface); border: 1.5px solid var(--border2);
+      border-radius: 14px; padding: 24px; margin-bottom: 16px;
+    }
+    .ollama-icon { font-size: 36px; margin-bottom: 12px; }
+    .ollama-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .ollama-desc { font-size: 12px; color: var(--muted2); line-height: 1.6; margin-bottom: 20px; }
+
+    .feature-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 20px; }
+    .feature-item { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted2); }
+    .feature-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+
+    /* ── Buttons ── */
+    .btn-primary {
+      width: 100%; max-width: 520px; padding: 13px;
+      background: var(--accent); border: none; border-radius: 10px;
+      color: white; font-family: var(--sans); font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s; -webkit-app-region: no-drag;
+      margin-bottom: 10px;
+    }
+    .btn-primary:hover { background: #4a7df5; transform: translateY(-1px); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled { background: var(--muted); cursor: not-allowed; transform: none; }
+
+    .btn-secondary {
+      width: 100%; max-width: 520px; padding: 12px;
+      background: none; border: 1.5px solid var(--border2); border-radius: 10px;
+      color: var(--muted2); font-family: var(--sans); font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all 0.15s; -webkit-app-region: no-drag;
+      margin-bottom: 10px;
+    }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Checking state ── */
+    .checking-row {
+      display: none; align-items: center; gap: 10px;
+      width: 100%; max-width: 520px;
+      font-family: var(--mono); font-size: 11px; color: var(--muted2);
+      margin-bottom: 10px;
+    }
+    .checking-row.visible { display: flex; }
+    .spinner {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid var(--border2); border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite; flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Status badge ── */
+    .status-badge {
+      display: none; align-items: center; gap: 8px;
+      width: 100%; max-width: 520px;
+      padding: 10px 14px; border-radius: 8px; margin-bottom: 12px;
+      font-family: var(--mono); font-size: 11px;
+    }
+    .status-badge.visible { display: flex; }
+    .status-badge.ok { background: rgba(52,211,153,0.08); color: var(--green); border: 1px solid rgba(52,211,153,0.2); }
+    .status-badge.err { background: rgba(248,113,113,0.08); color: var(--red); border: 1px solid rgba(248,113,113,0.2); }
+
+    /* ── Section title ── */
+    .section-title {
+      font-family: var(--mono); font-size: 10px; font-weight: 500;
+      letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 12px;
+      align-self: flex-start; width: 100%; max-width: 520px;
+    }
+
+    /* ── Model cards ── */
+    .models-grid { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 520px; margin-bottom: 16px; }
+    .model-card {
+      background: var(--surface); border: 1.5px solid var(--border);
+      border-radius: 10px; padding: 14px 16px; cursor: pointer;
+      transition: all 0.15s ease; display: flex; align-items: center; gap: 14px;
+      -webkit-app-region: no-drag;
+    }
+    .model-card:hover { border-color: var(--border2); background: #1a1e28; }
+    .model-card.selected { border-color: var(--accent); background: rgba(91,140,255,0.07); }
+    .model-radio {
+      width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--muted);
+      flex-shrink: 0; transition: all 0.15s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .model-card.selected .model-radio { border-color: var(--accent); background: var(--accent); }
+    .model-card.selected .model-radio::after { content: ''; width: 5px; height: 5px; border-radius: 50%; background: white; }
+    .model-info { flex: 1; }
+    .model-name { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+    .model-desc { font-size: 11px; color: var(--muted2); line-height: 1.4; }
+    .model-meta { text-align: right; flex-shrink: 0; }
+    .model-size { font-family: var(--mono); font-size: 11px; color: var(--muted2); margin-bottom: 3px; }
+    .model-badge { display: inline-block; font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; }
+    .badge-recommended { background: rgba(52,211,153,0.12); color: var(--green); }
+    .badge-powerful    { background: rgba(167,139,250,0.12); color: var(--accent2); }
+    .badge-fast        { background: rgba(251,191,36,0.12);  color: var(--yellow); }
+
+    /* ── Progress ── */
+    .progress-area { display: none; flex-direction: column; gap: 10px; width: 100%; max-width: 520px; }
+    .progress-area.visible { display: flex; }
+    .progress-percent { font-family: var(--mono); font-size: 24px; font-weight: 500; color: var(--text); text-align: center; }
+    .progress-track { width: 100%; height: 4px; background: var(--border2); border-radius: 4px; overflow: hidden; }
+    .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 4px; transition: width 0.3s ease; }
+    .progress-status { font-family: var(--mono); font-size: 11px; color: var(--muted2); }
+    .progress-detail { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: center; }
+
+    /* ── Success ── */
+    .success-area { display: none; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+    .success-area.visible { display: flex; }
+    .success-icon { font-size: 40px; }
+    .success-title { font-size: 16px; font-weight: 600; }
+    .success-sub { font-size: 12px; color: var(--muted2); }
+    .btn-launch {
+      margin-top: 6px; padding: 12px 32px;
+      background: var(--green); border: none; border-radius: 10px;
+      color: #0d1a12; font-family: var(--sans); font-size: 14px; font-weight: 700;
+      cursor: pointer; transition: all 0.15s; -webkit-app-region: no-drag;
+    }
+    .btn-launch:hover { background: #2ec98a; transform: translateY(-1px); }
+
+    .skip-link {
+      font-size: 11px; color: var(--muted); cursor: pointer;
+      text-decoration: underline; -webkit-app-region: no-drag;
+      margin-top: 8px;
+    }
+    .skip-link:hover { color: var(--muted2); }
+
+    .error-msg {
+      display: none; font-family: var(--mono); font-size: 11px; color: var(--red);
+      text-align: center; padding: 10px;
+      background: rgba(248,113,113,0.08); border-radius: 8px;
+      width: 100%; max-width: 520px;
+    }
+    .error-msg.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN 1 — Ollama Setup
+     Shown when Ollama is not detected
+═══════════════════════════════════════════════ -->
+<div class="screen active" id="screen-ollama">
+
+  <div class="logo-row">
+    <div class="logo-box">📊</div>
+    <div class="app-name">Excel AI Analyzer</div>
+  </div>
+  <div class="subtitle">One-time setup — takes about 2 minutes</div>
+
+  <!-- Step indicator -->
+  <div class="steps">
+    <div class="step active" id="step1">
+      <div class="step-dot">1</div>
+      <span>Install Ollama</span>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step2">
+      <div class="step-dot">2</div>
+      <span>Choose AI Model</span>
+    </div>
+  </div>
+
+  <!-- Ollama info card -->
+  <div class="ollama-card" style="max-width:520px;width:100%;">
+    <div class="ollama-icon">🦙</div>
+    <div class="ollama-title">Ollama — the AI engine</div>
+    <div class="ollama-desc">
+      Ollama runs AI models locally on your machine. It's free, open source,
+      and takes about 30 seconds to install.
+    </div>
+    <div class="feature-list">
+      <div class="feature-item"><div class="feature-dot"></div>Your data never leaves your computer</div>
+      <div class="feature-item"><div class="feature-dot"></div>Works completely offline after setup</div>
+      <div class="feature-item"><div class="feature-dot"></div>Free — no subscription, no API key</div>
+    </div>
+  </div>
+
+  <!-- Status badge — shown after check -->
+  <div class="status-badge" id="ollamaStatusBadge">
+    <span id="ollamaStatusText"></span>
+  </div>
+
+  <!-- Checking indicator -->
+  <div class="checking-row" id="checkingRow">
+    <div class="spinner"></div>
+    <span>Checking for Ollama…</span>
+  </div>
+
+  <!-- Buttons -->
+  <button class="btn-primary" id="downloadOllamaBtn" onclick="openOllamaDownload()">
+    Download Ollama — free  →  ollama.com
+  </button>
+
+  <button class="btn-secondary" id="checkAgainBtn" onclick="checkOllama()">
+    ✓  I've installed it — Check Again
+  </button>
+
+  <div class="skip-link" onclick="skipSetup()">Skip for now</div>
+
+</div>
+
+
+<!-- ══════════════════════════════════════════════
+     SCREEN 2 — Model Selection
+     Shown once Ollama is confirmed running
+═══════════════════════════════════════════════ -->
+<div class="screen" id="screen-model">
+
+  <div class="logo-row">
+    <div class="logo-box">📊</div>
+    <div class="app-name">Excel AI Analyzer</div>
+  </div>
+  <div class="subtitle">Choose your AI model — downloaded once, runs forever offline</div>
+
+  <!-- Step indicator -->
+  <div class="steps">
+    <div class="step done" id="step1b">
+      <div class="step-dot">✓</div>
+      <span>Ollama ready</span>
+    </div>
+    <div class="step-line"></div>
+    <div class="step active" id="step2b">
+      <div class="step-dot">2</div>
+      <span>Choose AI Model</span>
+    </div>
+  </div>
+
+  <!-- Model selection area -->
+  <div id="setupArea" style="width:100%;max-width:520px;display:flex;flex-direction:column;align-items:stretch;">
+    <div class="section-title">// Select AI Model</div>
+
+    <div class="models-grid">
+      <div class="model-card selected" data-model="qwen3:1.7b" onclick="selectModel(this)">
+        <div class="model-radio"></div>
+        <div class="model-info">
+          <div class="model-name">qwen3:1.7b</div>
+          <div class="model-desc">Fast and lightweight. Works on any machine. Great for quick analysis and simple questions.</div>
+        </div>
+        <div class="model-meta">
+          <div class="model-size">~1.1 GB</div>
+          <span class="model-badge badge-recommended">Recommended</span>
+        </div>
+      </div>
+
+      <div class="model-card" data-model="qwen3:8b" onclick="selectModel(this)">
+        <div class="model-radio"></div>
+        <div class="model-info">
+          <div class="model-name">qwen3:8b</div>
+          <div class="model-desc">Smarter and more accurate. Best for complex spreadsheets and detailed analysis. Needs 8 GB+ RAM.</div>
+        </div>
+        <div class="model-meta">
+          <div class="model-size">~5.2 GB</div>
+          <span class="model-badge badge-powerful">Powerful</span>
+        </div>
+      </div>
+
+      <div class="model-card" data-model="llama3.2:3b" onclick="selectModel(this)">
+        <div class="model-radio"></div>
+        <div class="model-info">
+          <div class="model-name">llama3.2:3b</div>
+          <div class="model-desc">Meta's model. Strong English reasoning, good at summaries and explanations.</div>
+        </div>
+        <div class="model-meta">
+          <div class="model-size">~2.0 GB</div>
+          <span class="model-badge badge-fast">Fast</span>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="downloadModelBtn" onclick="startDownload()">
+      Download &amp; Install Model
+    </button>
+    <div class="error-msg" id="errorMsg"></div>
+    <div class="skip-link" onclick="skipSetup()">Skip for now (I'll add a model later)</div>
+  </div>
+
+  <!-- Progress area -->
+  <div class="progress-area" id="progressArea">
+    <div class="progress-percent" id="progressPct">0%</div>
+    <div class="progress-track">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="progress-status" id="progressStatus">Starting download…</div>
+    <div class="progress-detail" id="progressDetail"></div>
+  </div>
+
+  <!-- Success area -->
+  <div class="success-area" id="successArea">
+    <div class="success-icon">✅</div>
+    <div class="success-title">You're all set!</div>
+    <div class="success-sub" id="successSub">Your AI is installed and ready to use.</div>
+    <button class="btn-launch" onclick="launchApp()">Open Excel AI Analyzer →</button>
+  </div>
+
+</div>
+
+
+<script>
+  const API = 'http://localhost:3000';
+  let selectedModel = 'qwen3:1.7b';
+  let checkInterval = null;
+
+  // ── On load: check if Ollama is already running ──────────────
+  window.addEventListener('load', () => {
+    checkOllama(true); // silent = true on first load
+  });
+
+  async function checkOllama(silent = false) {
+    const checkingRow  = document.getElementById('checkingRow');
+    const statusBadge  = document.getElementById('ollamaStatusBadge');
+    const statusText   = document.getElementById('ollamaStatusText');
+    const checkBtn     = document.getElementById('checkAgainBtn');
+
+    if (!silent) {
+      checkingRow.classList.add('visible');
+      statusBadge.classList.remove('visible');
+      checkBtn.disabled = true;
+      checkBtn.textContent = 'Checking…';
+    }
+
+    try {
+      const resp = await fetch(`${API}/health`, { signal: AbortSignal.timeout(4000) });
+      const data = await resp.json();
+
+      checkingRow.classList.remove('visible');
+      checkBtn.disabled = false;
+      checkBtn.textContent = '✓  I\'ve installed it — Check Again';
+
+      if (data.ollama) {
+        // Ollama is running — advance to model screen
+        showModelScreen();
+      } else {
+        if (!silent) {
+          // Show "not detected" badge only after user clicks Check Again
+          statusBadge.className = 'status-badge visible err';
+          statusText.textContent = '✗  Ollama not detected — make sure it is running after install';
+        }
+      }
+    } catch {
+      checkingRow.classList.remove('visible');
+      checkBtn.disabled = false;
+      checkBtn.textContent = '✓  I\'ve installed it — Check Again';
+      if (!silent) {
+        statusBadge.className = 'status-badge visible err';
+        document.getElementById('ollamaStatusText').textContent =
+          '✗  Could not reach backend — is the app still starting up?';
+      }
+    }
+  }
+
+  function showModelScreen() {
+    document.getElementById('screen-ollama').classList.remove('active');
+    document.getElementById('screen-model').classList.add('active');
+  }
+
+  function openOllamaDownload() {
+    // Electron will intercept this and open in the user's browser
+    window.open('https://ollama.com', '_blank');
+  }
+
+  // ── Model selection ──────────────────────────────────────────
+  function selectModel(card) {
+    document.querySelectorAll('.model-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedModel = card.dataset.model;
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '';
+    const gb = bytes / (1024 ** 3);
+    if (gb >= 0.1) return `${gb.toFixed(2)} GB`;
+    return `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
+  }
+
+  // ── Model download ───────────────────────────────────────────
+  async function startDownload() {
+    const btn          = document.getElementById('downloadModelBtn');
+    const setupArea    = document.getElementById('setupArea');
+    const progressArea = document.getElementById('progressArea');
+    const errorMsg     = document.getElementById('errorMsg');
+
+    btn.disabled = true;
+    errorMsg.classList.remove('visible');
+    setupArea.style.display = 'none';
+    progressArea.classList.add('visible');
+
+    try {
+      const resp = await fetch(`${API}/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.error) throw new Error(data.error);
+            if (data.status) document.getElementById('progressStatus').textContent = data.status;
+            if (data.total && data.completed) {
+              const pct = Math.round((data.completed / data.total) * 100);
+              document.getElementById('progressBar').style.width = pct + '%';
+              document.getElementById('progressPct').textContent  = pct + '%';
+              document.getElementById('progressDetail').textContent =
+                `${formatBytes(data.completed)} / ${formatBytes(data.total)}`;
+            }
+            if (data.status === 'success') { showSuccess(); return; }
+          } catch(e) {
+            if (e.message !== 'Unexpected end of JSON input') { showError(e.message); return; }
+          }
+        }
+      }
+      showSuccess();
+
+    } catch (err) {
+      progressArea.classList.remove('visible');
+      setupArea.style.display = '';
+      btn.disabled = false;
+      showError(err.message);
+    }
+  }
+
+  function showSuccess() {
+    document.getElementById('progressArea').classList.remove('visible');
+    document.getElementById('successSub').textContent =
+      `${selectedModel} is installed and ready to use.`;
+    document.getElementById('successArea').classList.add('visible');
+  }
+
+  function showError(msg) {
+    const errorMsg = document.getElementById('errorMsg');
+    errorMsg.textContent = `Error: ${msg}`;
+    errorMsg.classList.add('visible');
+  }
+
+  function launchApp()  { window.location.href = 'launch://app'; }
+  function skipSetup()  { window.location.href = 'launch://app'; }
+</script>
+</body>
+</html>
