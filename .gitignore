@@ -1,0 +1,10 @@
+node_modules/
+dist/
+backend/dist/
+*.dmg
+*.exe
+*.app
+*.pkg
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel AI Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=Cabinet+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #0b0c0f;
+  --panel:   #111318;
+  --surface: #181b22;
+  --border:  #22262f;
+  --border2: #2c3140;
+  --accent:  #5b8cff;
+  --accent2: #a78bfa;
+  --green:   #34d399;
+  --red:     #f87171;
+  --yellow:  #fbbf24;
+  --text:    #dde3ef;
+  --muted:   #505870;
+  --muted2:  #7a859c;
+  --r:       10px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'Cabinet Grotesk',sans-serif;
+  display:flex;flex-direction:column;height:100vh;overflow:hidden;
+}
+
+/* TOP BAR */
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 18px;height:50px;
+  border-bottom:1px solid var(--border);background:var(--panel);
+  flex-shrink:0;gap:14px;
+}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:15px;white-space:nowrap;}
+.brand-logo{
+  width:26px;height:26px;border-radius:6px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+}
+.topbar-mid{display:flex;align-items:center;gap:10px;flex:1;max-width:500px;margin:0 auto;}
+.model-sel{
+  background:var(--surface);border:1px solid var(--border2);border-radius:6px;
+  color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;
+  padding:5px 10px;outline:none;cursor:pointer;flex:1;
+}
+.model-sel:focus{border-color:var(--accent);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s;}
+.dot.ok {background:var(--green);box-shadow:0 0 6px rgba(52,211,153,.5);}
+.dot.err{background:var(--red);}
+.dot-lbl{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted2);white-space:nowrap;}
+.topbar-right{display:flex;align-items:center;gap:8px;}
+.api-input{
+  background:var(--surface);border:1px solid var(--border2);border-radius:6px;
+  color:var(--muted2);font-family:'IBM Plex Mono',monospace;font-size:10px;
+  padding:4px 10px;outline:none;width:180px;
+}
+.api-input:focus{border-color:var(--accent);}
+.btn-xs{
+  font-size:11px;font-weight:700;padding:4px 10px;border-radius:6px;
+  border:1px solid var(--border2);background:var(--surface);
+  color:var(--muted2);cursor:pointer;transition:all .15s;white-space:nowrap;
+  font-family:'Cabinet Grotesk',sans-serif;
+}
+.btn-xs:hover{border-color:var(--accent);color:var(--accent);}
+.btn-xs.danger:hover{border-color:var(--red);color:var(--red);}
+
+/* MAIN */
+.workspace{display:flex;flex:1;overflow:hidden;}
+
+/* LEFT */
+.left{
+  width:290px;min-width:220px;flex-shrink:0;
+  background:var(--panel);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.ph{padding:14px 14px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.pt{
+  font-family:'IBM Plex Mono',monospace;font-size:9px;
+  letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;
+}
+
+/* Upload buttons */
+.upload-btns{display:flex;gap:8px;margin-bottom:10px;}
+.upload-btn{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;padding:12px 8px;border-radius:8px;cursor:pointer;
+  border:1.5px dashed var(--border2);background:var(--surface);
+  transition:all .2s;position:relative;
+}
+.upload-btn:hover,.upload-btn.drag{border-color:var(--accent);background:rgba(91,140,255,.05);}
+.upload-btn input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.upload-btn .ub-icon{font-size:18px;}
+.upload-btn .ub-label{font-size:11px;font-weight:700;text-align:center;}
+.upload-btn .ub-sub{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted2);}
+
+/* Progress */
+.up-prog{display:none;margin-bottom:8px;}
+.up-prog.show{display:block;}
+.up-track{height:3px;background:var(--border2);border-radius:99px;overflow:hidden;}
+.up-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0%;transition:width .3s;border-radius:99px;}
+.up-lbl{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted2);margin-top:5px;}
+
+/* File list */
+.file-wrap{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+.file-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100px;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:11px;gap:6px;
+}
+.file-entry{
+  display:flex;align-items:flex-start;gap:9px;padding:10px 14px;
+  cursor:pointer;border-bottom:1px solid rgba(255,255,255,.03);transition:background .15s;
+  position:relative;
+}
+.file-entry:hover{background:rgba(255,255,255,.02);}
+.file-entry.sel{background:rgba(91,140,255,.08);}
+.file-entry.sel::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;
+  width:3px;background:var(--accent);border-radius:0 2px 2px 0;
+}
+.fext{
+  width:30px;height:30px;border-radius:6px;flex-shrink:0;margin-top:1px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:500;
+}
+.fx-xlsx{background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.3);}
+.fx-xls {background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.3);}
+.fx-csv {background:rgba(192,132,252,.12);color:#c084fc;border:1px solid rgba(192,132,252,.3);}
+.fi{flex:1;min-width:0;}
+.fi-name{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fi-meta{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted2);margin-top:2px;}
+.del-btn{
+  background:none;border:none;cursor:pointer;color:var(--muted);
+  font-size:12px;padding:2px 4px;border-radius:4px;transition:all .15s;flex-shrink:0;
+}
+.del-btn:hover{color:var(--red);background:rgba(248,113,113,.1);}
+
+/* Sheet bar */
+.sheet-bar{display:none;padding:8px 14px;border-top:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;gap:6px;}
+.sheet-bar.show{display:flex;}
+.stab{
+  font-family:'IBM Plex Mono',monospace;font-size:10px;padding:3px 9px;border-radius:4px;
+  border:1px solid var(--border2);background:var(--surface);color:var(--muted2);cursor:pointer;transition:all .15s;
+}
+.stab:hover{border-color:var(--accent);color:var(--accent);}
+.stab.active{border-color:var(--accent);background:rgba(91,140,255,.12);color:var(--accent);}
+
+/* RIGHT / CHAT */
+.right{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);}
+
+.chat-head{
+  padding:13px 18px;border-bottom:1px solid var(--border);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+}
+.ctx-label{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ctx-sheet{
+  font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--accent);
+  background:rgba(91,140,255,.1);border:1px solid rgba(91,140,255,.2);
+  padding:2px 8px;border-radius:3px;white-space:nowrap;
+}
+.ctx-none{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);}
+.clear-chat-btn{
+  font-family:'IBM Plex Mono',monospace;font-size:10px;padding:4px 10px;border-radius:5px;
+  border:1px solid var(--border2);background:none;color:var(--muted2);cursor:pointer;
+  white-space:nowrap;flex-shrink:0;transition:all .15s;
+}
+.clear-chat-btn:hover{border-color:var(--red);color:var(--red);}
+
+/* Messages */
+.msgs{
+  flex:1;overflow-y:auto;padding:20px 0;
+  scrollbar-width:thin;scrollbar-color:var(--border2) transparent;
+}
+.empty-st{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;gap:10px;color:var(--muted);text-align:center;padding:32px;
+}
+.empty-st .big{font-size:44px;margin-bottom:6px;}
+.empty-st h2{font-size:18px;font-weight:800;color:var(--muted2);}
+.empty-st p{font-family:'IBM Plex Mono',monospace;font-size:11px;max-width:320px;line-height:1.7;}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:8px;}
+.chip{
+  font-family:'IBM Plex Mono',monospace;font-size:10px;padding:5px 12px;border-radius:16px;
+  border:1px solid var(--border2);background:var(--surface);color:var(--muted2);cursor:pointer;transition:all .15s;
+}
+.chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(91,140,255,.05);}
+
+.msg-row{
+  display:flex;padding:5px 18px;gap:12px;
+  max-width:880px;margin:0 auto;width:100%;
+  animation:fadeUp .2s ease;
+}
+.avatar{
+  width:26px;height:26px;border-radius:6px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:12px;margin-top:2px;
+}
+.avatar.user{background:rgba(91,140,255,.15);border:1px solid rgba(91,140,255,.25);}
+.avatar.ai  {background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.25);}
+.bubble{
+  flex:1;min-width:0;padding:10px 13px;border-radius:9px;
+  font-size:13.5px;line-height:1.7;border:1px solid transparent;
+}
+.bubble.user{background:rgba(91,140,255,.08);border-color:rgba(91,140,255,.15);}
+.bubble.ai  {background:var(--surface);border-color:var(--border);}
+.bubble pre{
+  background:rgba(0,0,0,.4);border:1px solid var(--border2);border-radius:6px;
+  padding:10px 13px;overflow-x:auto;font-family:'IBM Plex Mono',monospace;font-size:11.5px;margin:8px 0;line-height:1.5;
+}
+.bubble code{font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:rgba(0,0,0,.3);padding:2px 5px;border-radius:3px;}
+.bubble pre code{background:none;padding:0;}
+.bubble table{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0;}
+.bubble th,.bubble td{border:1px solid var(--border2);padding:5px 9px;text-align:left;}
+.bubble th{background:rgba(255,255,255,.04);font-weight:700;}
+.bubble p{margin:3px 0;}
+.bubble ul,.bubble ol{padding-left:18px;margin:3px 0;}
+.bubble strong{font-weight:700;}
+.bubble h1,.bubble h2,.bubble h3{font-weight:700;margin:7px 0 3px;}
+.dots{display:flex;gap:4px;align-items:center;padding:4px 0;}
+.dots span{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 1.2s ease infinite;}
+.dots span:nth-child(2){animation-delay:.2s;}
+.dots span:nth-child(3){animation-delay:.4s;}
+@keyframes pulse{0%,80%,100%{opacity:.2;transform:scale(.8);}40%{opacity:1;transform:scale(1);}}
+
+/* INPUT */
+.input-area{
+  border-top:1px solid var(--border);padding:14px 18px;flex-shrink:0;background:var(--panel);
+}
+.input-row{display:flex;gap:9px;align-items:flex-end;max-width:880px;margin:0 auto;}
+.qbox{
+  flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:9px;
+  padding:9px 13px;color:var(--text);font-family:'Cabinet Grotesk',sans-serif;font-size:13.5px;
+  resize:none;outline:none;min-height:42px;max-height:150px;line-height:1.5;transition:border-color .2s;
+  scrollbar-width:thin;
+}
+.qbox:focus{border-color:var(--accent);}
+.qbox::placeholder{color:var(--muted);}
+.qbox:disabled{opacity:.4;}
+.send{
+  width:42px;height:42px;background:var(--accent);border:none;border-radius:9px;
+  color:#fff;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:all .15s;
+}
+.send:hover:not(:disabled){background:#7ca8ff;transform:translateY(-1px);box-shadow:0 4px 16px rgba(91,140,255,.35);}
+.send:disabled{opacity:.3;cursor:not-allowed;}
+.send.stop{background:rgba(248,113,113,.15);border:1px solid rgba(248,113,113,.3);color:var(--red);}
+.hint{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted);margin-top:7px;text-align:center;}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:none;}}
+
+/* Toasts */
+.toast-wrap{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:7px;z-index:999;}
+.toast{
+  background:var(--panel);border:1px solid var(--border2);border-radius:7px;
+  padding:9px 14px;font-family:'IBM Plex Mono',monospace;font-size:11px;
+  display:flex;align-items:center;gap:8px;animation:fadeUp .2s ease;
+  box-shadow:0 4px 18px rgba(0,0,0,.4);max-width:300px;
+}
+.tdot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.toast.ok  .tdot{background:var(--green);}
+.toast.err .tdot{background:var(--red);}
+.toast.info .tdot{background:var(--accent);}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo">📊</div>
+    Excel AI
+  </div>
+  <div class="topbar-mid">
+    <div class="dot" id="ollamaDot"></div>
+    <span class="dot-lbl" id="ollamaLbl">Checking...</span>
+    <select class="model-sel" id="modelSel"><option>Loading...</option></select>
+    <button class="btn-xs" id="addModelBtn" title="Download a new model from Ollama">+ Model</button>
+  </div>
+  <div class="topbar-right">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted)">API:</span>
+    <input class="api-input" id="apiBase" value="http://localhost:3000">
+    <button class="btn-xs danger" id="clearAllBtn">Clear All</button>
+  </div>
+</header>
+
+<div class="workspace">
+
+<!-- LEFT: file panel -->
+<div class="left">
+  <div class="ph">
+    <div class="pt">// Upload Files</div>
+
+    <!-- TWO separate upload buttons: folder OR individual files -->
+    <div class="upload-btns">
+
+      <!-- Button 1: Select individual files -->
+      <label class="upload-btn" id="filePicker">
+        <input type="file" id="fileInput" multiple
+          accept=".xlsx,.xls,.xlsm,.csv,
+                  application/vnd.ms-excel,
+                  application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,
+                  application/vnd.ms-excel.sheet.macroEnabled.12,
+                  text/csv,text/plain">
+        <div class="ub-icon">📄</div>
+        <div class="ub-label">Pick Files</div>
+        <div class="ub-sub">.xlsx .xls .xlsm .csv</div>
+      </label>
+
+      <!-- Button 2: Select entire folder -->
+      <label class="upload-btn" id="folderPicker">
+        <input type="file" id="folderInput" webkitdirectory multiple>
+        <div class="ub-icon">📁</div>
+        <div class="ub-label">Pick Folder</div>
+        <div class="ub-sub">all Excel inside</div>
+      </label>
+
+    </div>
+
+    <!-- Upload progress -->
+    <div class="up-prog" id="upProg">
+      <div class="up-track"><div class="up-fill" id="upFill"></div></div>
+      <div class="up-lbl" id="upLbl"></div>
+    </div>
+  </div>
+
+  <!-- File entries -->
+  <div class="file-wrap" id="fileWrap">
+    <div class="file-empty" id="fileEmpty">
+      <span style="font-size:26px">📂</span>
+      <span>No files loaded</span>
+    </div>
+  </div>
+
+  <!-- Sheet tabs -->
+  <div class="sheet-bar" id="sheetBar"></div>
+</div>
+
+<!-- RIGHT: chat panel -->
+<div class="right">
+  <div class="chat-head">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+      <span class="ctx-none" id="ctxLabel">← Select a file to start</span>
+    </div>
+    <button class="clear-chat-btn" id="clearChatBtn">↺ New Chat</button>
+  </div>
+
+  <div class="msgs" id="msgs">
+    <div class="empty-st" id="emptySt">
+      <div class="big">🤖</div>
+      <h2>Ask about your data</h2>
+      <p>Upload Excel files on the left, select one, then ask questions in plain English.</p>
+      <div class="chips">
+        <div class="chip" onclick="chip(this)">Summarize this file</div>
+        <div class="chip" onclick="chip(this)">What columns are there?</div>
+        <div class="chip" onclick="chip(this)">Show top 5 rows</div>
+        <div class="chip" onclick="chip(this)">Sum each numeric column</div>
+        <div class="chip" onclick="chip(this)">Any missing values?</div>
+        <div class="chip" onclick="chip(this)">What trends do you see?</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <textarea class="qbox" id="qbox" rows="1"
+        placeholder="Ask a question about your Excel data… (Enter to send)"
+        disabled></textarea>
+      <button class="send" id="sendBtn" disabled>➤</button>
+    </div>
+    <div class="hint">Runs locally via Ollama — your data never leaves your machine</div>
+  </div>
+</div>
+
+</div><!-- workspace -->
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+/* ── State ─────────────────────────────────────────────── */
+let selFile   = null;   // {id, name, sheets:[...], rows:{...}}
+let selSheet  = null;
+let history   = [];
+let streaming = false;
+let abortCtrl = null;
+
+const EXTS = ['xlsx','xls','csv'];
+
+/* ── DOM ────────────────────────────────────────────────── */
+const apiBase    = document.getElementById('apiBase');
+const fileInput  = document.getElementById('fileInput');
+const folderInput= document.getElementById('folderInput');
+const fileWrap   = document.getElementById('fileWrap');
+const fileEmpty  = document.getElementById('fileEmpty');
+const sheetBar   = document.getElementById('sheetBar');
+const msgs       = document.getElementById('msgs');
+const emptySt    = document.getElementById('emptySt');
+const qbox       = document.getElementById('qbox');
+const sendBtn    = document.getElementById('sendBtn');
+const ctxLabel   = document.getElementById('ctxLabel');
+const modelSel   = document.getElementById('modelSel');
+const ollamaDot  = document.getElementById('ollamaDot');
+const ollamaLbl  = document.getElementById('ollamaLbl');
+const upProg     = document.getElementById('upProg');
+const upFill     = document.getElementById('upFill');
+const upLbl      = document.getElementById('upLbl');
+
+const API = () => (apiBase.value||'http://localhost:3000').replace(/\/$/,'');
+const isExcel = f => EXTS.includes(f.name.split('.').pop().toLowerCase());
+const extOf   = f => f.name.split('.').pop().toLowerCase();
+
+/* ── Health + Models ────────────────────────────────────── */
+async function checkHealth(){
+  try{
+    const r=await fetch(`${API()}/health`,{signal:AbortSignal.timeout(4000)});
+    const d=await r.json();
+    ollamaDot.className='dot '+(d.ollama?'ok':'err');
+    ollamaLbl.textContent=d.ollama?'Ollama connected':'Ollama offline';
+    if(d.ollama) loadModels();
+  }catch{
+    ollamaDot.className='dot err';
+    ollamaLbl.textContent='Server offline';
+  }
+}
+
+async function loadModels(){
+  try{
+    const r=await fetch(`${API()}/models`);
+    const d=await r.json();
+    if(!d.models?.length){
+      modelSel.innerHTML='<option>No models - run: ollama pull qwen2.5</option>';
+      return;
+    }
+    const prev=modelSel.value; // save user's current selection
+    modelSel.innerHTML='';
+    d.models.forEach(m=>{
+      const o=document.createElement('option');
+      o.value=m; o.textContent=m;
+      modelSel.appendChild(o);
+    });
+    // restore the user's selection if it still exists in the list
+    if(prev && d.models.includes(prev)){
+      modelSel.value=prev;
+    }
+  }catch{ modelSel.innerHTML='<option>Unavailable</option>'; }
+}
+
+/* ── File input handlers ────────────────────────────────── */
+
+// Individual file picker
+fileInput.addEventListener('change',()=>{
+  const files=[...fileInput.files].filter(isExcel);
+  if(!files.length){ toast('No Excel/CSV files selected.','err'); return; }
+  uploadFiles(files);
+  fileInput.value='';
+});
+
+// Folder picker — filters out non-Excel files automatically
+folderInput.addEventListener('change',()=>{
+  const files=[...folderInput.files].filter(isExcel);
+  if(!files.length){ toast('No Excel/CSV files found in that folder.','err'); return; }
+  toast(`Found ${files.length} Excel file(s) in folder.`,'info');
+  uploadFiles(files);
+  folderInput.value='';
+});
+
+// Drag & drop onto either picker button
+['filePicker','folderPicker'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener('dragover',e=>{e.preventDefault();el.classList.add('drag');});
+  el.addEventListener('dragleave',()=>el.classList.remove('drag'));
+  el.addEventListener('drop',e=>{
+    e.preventDefault();el.classList.remove('drag');
+    const files=[...e.dataTransfer.files].filter(isExcel);
+    if(files.length) uploadFiles(files);
+    else toast('No Excel/CSV files in the drop.','err');
+  });
+});
+
+/* ── Upload ─────────────────────────────────────────────── */
+async function uploadFiles(files){
+  upProg.classList.add('show');
+  upFill.style.width='0%';
+  upLbl.textContent=`Uploading 0 / ${files.length}`;
+  fileEmpty.style.display='none';
+
+  let done=0;
+  for(const f of files){
+    const fd=new FormData();
+    fd.append('file',f);
+    fd.append('path',f.webkitRelativePath||f.name);
+    try{
+      const r=await fetch(`${API()}/upload`,{method:'POST',body:fd});
+      if(!r.ok){
+        const txt=await r.text();
+        toast(`Server error: ${txt.slice(0,80)}`,'err');
+      } else {
+        const d=await r.json();
+        (d.uploaded||[]).forEach(info=>{
+          if(info.error) toast(`${info.name}: ${info.error}`,'err');
+          else{ addEntry(info); toast(`Loaded: ${info.name}`,'ok'); }
+        });
+      }
+    }catch(e){
+      toast(`Upload failed (${f.name}): ${e.message}`,'err');
+    }
+    done++;
+    upFill.style.width=`${Math.round(done/files.length*100)}%`;
+    upLbl.textContent=`Uploading ${done} / ${files.length}`;
+  }
+
+  setTimeout(()=>upProg.classList.remove('show'),1200);
+}
+
+/* ── File entries ───────────────────────────────────────── */
+function fextClass(name){
+  const e=extOf({name});
+  return {xlsx:'fx-xlsx',xls:'fx-xls',csv:'fx-csv'}[e]||'fx-csv';
+}
+
+function addEntry(info){
+  const sheetCount=Object.keys(info.sheets||{}).length;
+  const totalRows =Object.values(info.rows||{}).reduce((a,b)=>a+b,0);
+  const ext       =info.name.split('.').pop().toUpperCase();
+
+  const el=document.createElement('div');
+  el.className='file-entry';
+  el.dataset.id=info.id;
+  el.innerHTML=`
+    <div class="fext ${fextClass(info.name)}">${ext}</div>
+    <div class="fi">
+      <div class="fi-name">${info.name}</div>
+      <div class="fi-meta">${sheetCount} sheet${sheetCount!==1?'s':''} · ${totalRows.toLocaleString()} rows</div>
+    </div>
+    <button class="del-btn" title="Remove">✕</button>`;
+
+  el.querySelector('.del-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    removeEntry(info.id,el);
+  });
+  el.addEventListener('click',()=>selectEntry(info,el));
+  fileWrap.appendChild(el);
+}
+
+function removeEntry(id,el){
+  fetch(`${API()}/files/${id}`,{method:'DELETE'}).catch(()=>{});
+  el.remove();
+  if(selFile?.id===id){
+    selFile=null;selSheet=null;
+    qbox.disabled=true;sendBtn.disabled=true;
+    sheetBar.classList.remove('show');
+    ctxLabel.outerHTML='<span class="ctx-none" id="ctxLabel">← Select a file to start</span>';
+  }
+  if(!fileWrap.querySelector('.file-entry')) fileEmpty.style.display='';
+}
+
+function selectEntry(info,el){
+  document.querySelectorAll('.file-entry').forEach(e=>e.classList.remove('sel'));
+  el.classList.add('sel');
+  selFile=info;
+
+  // Sheet tabs
+  const sheets=info.sheets||['Sheet1'];
+  selSheet=sheets[0];
+  sheetBar.innerHTML='';
+  sheetBar.classList.add('show');
+  sheets.forEach(s=>{
+    const t=document.createElement('button');
+    t.className='stab'; t.textContent=s;
+    t.addEventListener('click',()=>{
+      sheetBar.querySelectorAll('.stab').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      selSheet=s; updateCtx();
+    });
+    sheetBar.appendChild(t);
+  });
+  sheetBar.querySelector('.stab').classList.add('active');
+
+  updateCtx();
+  qbox.disabled=false; sendBtn.disabled=false;
+  qbox.focus();
+}
+
+function updateCtx(){
+  const container=document.querySelector('.chat-head > div');
+  container.innerHTML=selFile
+    ? `<span class="ctx-label">${selFile.name}</span><span class="ctx-sheet">${selSheet}</span>`
+    : `<span class="ctx-none" id="ctxLabel">← Select a file to start</span>`;
+}
+
+document.getElementById('clearAllBtn').addEventListener('click',async()=>{
+  await fetch(`${API()}/files`,{method:'DELETE'}).catch(()=>{});
+  fileWrap.querySelectorAll('.file-entry').forEach(e=>e.remove());
+  fileEmpty.style.display='';
+  selFile=null;selSheet=null;
+  qbox.disabled=true;sendBtn.disabled=true;
+  sheetBar.classList.remove('show');
+  clearChat();
+  toast('All files cleared.','info');
+});
+
+/* ── Chat ───────────────────────────────────────────────── */
+document.getElementById('clearChatBtn').addEventListener('click',clearChat);
+function clearChat(){
+  history=[];
+  msgs.innerHTML='';
+  msgs.appendChild(emptySt);
+  emptySt.style.display='flex';
+}
+
+qbox.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}
+});
+qbox.addEventListener('input',()=>{
+  qbox.style.height='auto';
+  qbox.style.height=Math.min(qbox.scrollHeight,150)+'px';
+});
+sendBtn.addEventListener('click',()=>{
+  if(streaming){abortCtrl?.abort();return;}
+  send();
+});
+
+function chip(el){
+  if(!selFile){toast('Select a file first.','err');return;}
+  qbox.value=el.textContent;
+  qbox.dispatchEvent(new Event('input'));
+  send();
+}
+
+function send(){
+  const q=qbox.value.trim();
+  if(!q||streaming)return;
+  if(!selFile){toast('Please select a file first.','err');return;}
+
+  qbox.value='';qbox.style.height='auto';
+  emptySt.style.display='none';
+
+  appendMsg('user',q);
+  history.push({role:'user',content:q});
+  streamResponse(q);
+}
+
+function appendMsg(role,content){
+  const row=document.createElement('div');
+  row.className='msg-row';
+  row.innerHTML=`
+    <div class="avatar ${role}">${role==='user'?'👤':'🤖'}</div>
+    <div class="bubble ${role}">${role==='user'?esc(content):''}</div>`;
+  msgs.appendChild(row);
+  msgs.scrollTop=msgs.scrollHeight;
+  return row.querySelector('.bubble');
+}
+
+async function streamResponse(q){
+  streaming=true;
+  sendBtn.textContent='■';sendBtn.classList.add('stop');
+  qbox.disabled=true;
+
+  const model=modelSel.value||'(unknown)';
+  const bubble=appendMsg('ai','');
+
+  // ── Status display ──────────────────────────────────────────
+  let elapsed=0;
+  let firstToken=false;
+  let timerInterval=null;
+
+  function statusHTML(stage,secs){
+    const stages={
+      connecting: {icon:'⚡', label:'AI engine starting…',        color:'var(--muted2)'},
+      sending:    {icon:'📤', label:'Sending data to Ollama…',   color:'var(--yellow)'},
+      waiting:    {icon:'💭', label:'AI is thinking, sit tight…', color:'var(--muted2)'}, 
+      streaming:  {icon:'💬', label:'Receiving response…',       color:'var(--green)'},
+      slow:       {icon:'💭', label:'Sit tight, your answer is on the way…',        color:'var(--muted2)'},
+    };
+    const s=stages[stage]||stages.waiting;
+    return `
+      <div style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${s.color}">${s.icon} ${s.label}</span>
+        </div>
+        <div style="display:flex;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);">
+          <span>⏱ <span id="timerVal">${secs}</span>s elapsed</span>
+          <span>🤖 ${esc(model)}</span>
+          <span>📄 ${esc(selFile?.name||'')}</span>
+        </div>
+        ${secs>=30?`<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);margin-top:2px;">
+          ✨ Almost there — your data stays 100% private on your machine
+        </div>`:''}
+      </div>`;
+  }
+
+  function updateTimer(stage){
+    bubble.innerHTML=statusHTML(stage,elapsed);
+    const tv=document.getElementById('timerVal');
+    if(tv) tv.textContent=elapsed;
+  }
+
+  bubble.innerHTML=statusHTML('connecting',0);
+  timerInterval=setInterval(()=>{
+    elapsed++;
+    if(!firstToken){
+      const stage=elapsed<5?'connecting':elapsed<15?'waiting':'slow';
+      updateTimer(stage);
+    }
+  },1000);
+
+  abortCtrl=new AbortController();
+  let full='';
+
+  try{
+    bubble.innerHTML=statusHTML('sending',elapsed);
+    const r=await fetch(`${API()}/chat`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        file_id: selFile.id,
+        sheet:   selSheet,
+        model:   model,
+        question:q,
+        history: history.slice(-8),
+      }),
+      signal:abortCtrl.signal,
+    });
+
+    if(!r.ok){
+      clearInterval(timerInterval);
+      const txt=await r.text();
+      bubble.innerHTML=`<span style="color:var(--red)">⚠ Server error (${r.status}): ${esc(txt.slice(0,200))}</span>`;
+      return;
+    }
+
+    const reader=r.body.getReader();
+    const dec=new TextDecoder();
+    bubble.innerHTML=statusHTML('waiting',elapsed);
+
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      const chunk=dec.decode(value,{stream:true});
+      if(chunk.trim()){
+        if(!firstToken){
+          firstToken=true;
+          clearInterval(timerInterval);
+          bubble.innerHTML='';
+          // Show a small "took Xs" badge at top
+          const badge=document.createElement('div');
+          badge.style.cssText='font-family:IBM Plex Mono,monospace;font-size:10px;color:var(--muted);margin-bottom:6px;';
+          badge.textContent=`🤖 ${model}  ·  first token in ${elapsed}s`;
+          bubble.appendChild(badge);
+        }
+        full+=chunk;
+        // Update just the content after the badge
+        let contentDiv=bubble.querySelector('.ai-content');
+        if(!contentDiv){
+          contentDiv=document.createElement('div');
+          contentDiv.className='ai-content';
+          bubble.appendChild(contentDiv);
+        }
+        contentDiv.innerHTML=md(full);
+        msgs.scrollTop=msgs.scrollHeight;
+      }
+    }
+
+    history.push({role:'assistant',content:full});
+
+  }catch(e){
+    clearInterval(timerInterval);
+    if(e.name==='AbortError'){
+      if(full){
+        let contentDiv=bubble.querySelector('.ai-content');
+        if(contentDiv) contentDiv.innerHTML=md(full+'\n\n*[Stopped after '+elapsed+'s]*');
+        else bubble.innerHTML=md(full+'\n\n*[Stopped]*');
+        history.push({role:'assistant',content:full});
+      } else {
+        bubble.innerHTML=`<span style="color:var(--muted2)">⛔ Cancelled after ${elapsed}s — no response received.<br><small>Model was: ${esc(model)}</small></span>`;
+      }
+    }else{
+      bubble.innerHTML=`<span style="color:var(--red)">⚠ Error after ${elapsed}s: ${esc(e.message)}<br><small>Check that python server.py is still running.</small></span>`;
+    }
+  }finally{
+    clearInterval(timerInterval);
+    streaming=false;
+    sendBtn.textContent='➤';sendBtn.classList.remove('stop');
+    qbox.disabled=false;qbox.focus();
+    msgs.scrollTop=msgs.scrollHeight;
+  }
+}
+
+/* ── Minimal Markdown renderer ──────────────────────────── */
+function md(s){
+  let h=esc(s);
+  h=h.replace(/```[\w]*\n?([\s\S]*?)```/g,'<pre><code>$1</code></pre>');
+  h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
+  h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+  // simple markdown table
+  h=h.replace(/((?:^\|.+\|\n)+)/gm,tblBlock=>{
+    const lines=tblBlock.trim().split('\n').filter(l=>/\w/.test(l)&&!/^[\|\s\-:]+$/.test(l));
+    if(!lines.length)return tblBlock;
+    const rows=lines.map(l=>l.split('|').filter((_,i,a)=>i&&i!==a.length-1).map(c=>c.trim()));
+    let t='<table>';
+    rows.forEach((r,i)=>{
+      t+='<tr>';
+      r.forEach(c=>{t+=i===0?`<th>${c}</th>`:`<td>${c}</td>`;});
+      t+='</tr>';
+    });
+    return t+'</table>';
+  });
+  h=h.replace(/^[-*] (.+)$/gm,'<li>$1</li>');
+  h=h.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,m=>`<ul>${m}</ul>`);
+  h=h.replace(/\n/g,'<br>');
+  h=h.replace(/(<\/(?:h[123]|pre|table|ul)>)<br>/g,'$1');
+  h=h.replace(/<br>(<(?:ul|table)>)/g,'$1');
+  return h;
+}
+
+function esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Toast ──────────────────────────────────────────────── */
+function toast(msg,type='info'){
+  const el=document.createElement('div');
+  el.className=`toast ${type}`;
+  el.innerHTML=`<div class="tdot"></div>${esc(msg)}`;
+  document.getElementById('toastWrap').appendChild(el);
+  setTimeout(()=>el.remove(),4500);
+}
+
+/* ── Init ───────────────────────────────────────────────── */
+checkHealth();
+setInterval(checkHealth,15000);
+apiBase.addEventListener('change',checkHealth);
+</script>
+
+<!-- ── Add Model Modal ─────────────────────────────────────── -->
+<div id="addModelOverlay" style="
+  display:none;position:fixed;inset:0;z-index:1000;
+  background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;
+">
+  <div style="
+    background:#151820;border:1px solid #2a3045;border-radius:14px;
+    padding:28px;width:460px;max-width:95vw;
+    font-family:'Cabinet Grotesk',sans-serif;
+  ">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <div style="font-size:15px;font-weight:700;color:#dde3ef;">Download AI Model</div>
+      <button onclick="closeAddModel()" style="
+        background:none;border:none;color:#505870;font-size:18px;cursor:pointer;padding:2px 6px;
+      ">✕</button>
+    </div>
+
+    <!-- Quick picks -->
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#505870;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">Quick picks</div>
+    <div id="quickPicks" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+      <button onclick="setModelInput('qwen3:1.7b')" class="qpick">qwen3:1.7b <span style="color:#505870;font-size:9px">~1GB</span></button>
+      <button onclick="setModelInput('qwen3:8b')" class="qpick">qwen3:8b <span style="color:#505870;font-size:9px">~5GB</span></button>
+      <button onclick="setModelInput('llama3.2:3b')" class="qpick">llama3.2:3b <span style="color:#505870;font-size:9px">~2GB</span></button>
+      <button onclick="setModelInput('mistral')" class="qpick">mistral <span style="color:#505870;font-size:9px">~4GB</span></button>
+      <button onclick="setModelInput('gemma3:4b')" class="qpick">gemma3:4b <span style="color:#505870;font-size:9px">~3GB</span></button>
+      <button onclick="setModelInput('deepseek-r1:7b')" class="qpick">deepseek-r1:7b <span style="color:#505870;font-size:9px">~5GB</span></button>
+    </div>
+
+    <!-- Custom input -->
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#505870;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Or type any model from ollama.com/library</div>
+    <input id="modelPullInput" placeholder="e.g. qwen3:30b" style="
+      width:100%;background:#0d0f14;border:1px solid #2a3045;border-radius:8px;
+      color:#dde3ef;font-family:'IBM Plex Mono',monospace;font-size:12px;
+      padding:10px 12px;outline:none;margin-bottom:14px;
+    " onkeydown="if(event.key==='Enter')startPull()"/>
+
+    <!-- Progress -->
+    <div id="pullProgressArea" style="display:none;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+        <span id="pullStatus" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a859c;"></span>
+        <span id="pullPct" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#dde3ef;">0%</span>
+      </div>
+      <div style="width:100%;height:3px;background:#1e2330;border-radius:3px;overflow:hidden;">
+        <div id="pullBar" style="height:100%;width:0%;background:linear-gradient(90deg,#5b8cff,#a78bfa);border-radius:3px;transition:width .3s ease;"></div>
+      </div>
+      <div id="pullDetail" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#505870;margin-top:5px;"></div>
+    </div>
+
+    <div id="pullError" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f87171;padding:8px 12px;background:rgba(248,113,113,.08);border-radius:6px;margin-bottom:12px;"></div>
+
+    <div style="display:flex;gap:8px;">
+      <button id="pullBtn" onclick="startPull()" style="
+        flex:1;padding:10px;background:#5b8cff;border:none;border-radius:8px;
+        color:white;font-family:'Cabinet Grotesk',sans-serif;font-size:13px;font-weight:600;cursor:pointer;
+      ">Download Model</button>
+      <button onclick="closeAddModel()" style="
+        padding:10px 16px;background:none;border:1px solid #2a3045;border-radius:8px;
+        color:#7a859c;font-family:'Cabinet Grotesk',sans-serif;font-size:13px;cursor:pointer;
+      ">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.qpick{
+  background:#0d0f14;border:1px solid #2a3045;border-radius:6px;
+  color:#dde3ef;font-family:'IBM Plex Mono',monospace;font-size:11px;
+  padding:5px 10px;cursor:pointer;transition:all .12s;
+}
+.qpick:hover{border-color:#5b8cff;color:#5b8cff;}
+</style>
+
+<script>
+// ── Add Model Modal ───────────────────────────────────────────
+document.getElementById('addModelBtn').addEventListener('click', () => {
+  document.getElementById('addModelOverlay').style.display = 'flex';
+  document.getElementById('modelPullInput').focus();
+  resetPullUI();
+});
+
+function closeAddModel() {
+  document.getElementById('addModelOverlay').style.display = 'none';
+  resetPullUI();
+}
+
+function setModelInput(name) {
+  document.getElementById('modelPullInput').value = name;
+  document.getElementById('modelPullInput').focus();
+}
+
+function resetPullUI() {
+  document.getElementById('pullProgressArea').style.display = 'none';
+  document.getElementById('pullError').style.display = 'none';
+  document.getElementById('pullBtn').disabled = false;
+  document.getElementById('pullBtn').textContent = 'Download Model';
+  document.getElementById('pullBar').style.width = '0%';
+  document.getElementById('pullPct').textContent = '0%';
+}
+
+function formatBytes(b) {
+  if (!b) return '';
+  const gb = b / (1024**3);
+  if (gb >= 0.1) return `${gb.toFixed(2)} GB`;
+  return `${(b/(1024**2)).toFixed(0)} MB`;
+}
+
+async function startPull() {
+  const modelName = document.getElementById('modelPullInput').value.trim();
+  if (!modelName) { toast('Enter a model name first', 'err'); return; }
+
+  const pullBtn = document.getElementById('pullBtn');
+  const progressArea = document.getElementById('pullProgressArea');
+  const errorDiv = document.getElementById('pullError');
+
+  pullBtn.disabled = true;
+  pullBtn.textContent = 'Downloading…';
+  progressArea.style.display = 'block';
+  errorDiv.style.display = 'none';
+
+  try {
+    const resp = await fetch(`${API()}/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelName }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.error) throw new Error(data.error);
+
+          if (data.status) {
+            document.getElementById('pullStatus').textContent = data.status;
+          }
+          if (data.total && data.completed) {
+            const pct = Math.round((data.completed / data.total) * 100);
+            document.getElementById('pullBar').style.width = pct + '%';
+            document.getElementById('pullPct').textContent = pct + '%';
+            document.getElementById('pullDetail').textContent =
+              `${formatBytes(data.completed)} / ${formatBytes(data.total)}`;
+          }
+          if (data.status === 'success') {
+            toast(`✓ ${modelName} downloaded successfully`, 'ok');
+            await loadModels();
+            // Select the newly downloaded model
+            document.getElementById('modelSel').value = modelName;
+            closeAddModel();
+            return;
+          }
+        } catch(e) {
+          if (e.message !== 'Unexpected end of JSON input') throw e;
+        }
+      }
+    }
+    // Stream ended — treat as success
+    toast(`✓ ${modelName} downloaded`, 'ok');
+    await loadModels();
+    document.getElementById('modelSel').value = modelName;
+    closeAddModel();
+
+  } catch (err) {
+    progressArea.style.display = 'none';
+    errorDiv.style.display = 'block';
+    errorDiv.textContent = `Error: ${err.message}`;
+    pullBtn.disabled = false;
+    pullBtn.textContent = 'Retry';
+  }
+}
+
+// Close overlay on background click
+document.getElementById('addModelOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeAddModel();
+});
+</script>
+</body>
+</html>
