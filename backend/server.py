@@ -43,7 +43,7 @@ uploaded_files: dict = {}
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_MODEL   = os.getenv("OLLAMA_MODEL",   "qwen2.5")
 
-MAX_SAMPLE_ROWS = 100   # rows shown in the data sample sent to Ollama
+MAX_SAMPLE_ROWS = 15    # rows shown in the data sample sent to Ollama (small = fast CPU prefill; aggregates come from COLUMN STATISTICS which cover ALL rows)
 MAX_COLS        = 30    # trim very wide sheets
 
 
@@ -354,7 +354,7 @@ def ollama_stream(model: str, system: str, messages: list):
         "model":    model,
         "stream":   True,
         "messages": [{"role": "system", "content": system}] + messages,
-        "options":  {"temperature": 0.15, "num_ctx": 16384},
+        "options":  {"temperature": 0.15, "num_ctx": 4096},
     }
     with requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
