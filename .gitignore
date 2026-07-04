@@ -15,3 +15,8 @@ backend/.venv/
 *.bak3
 backend/15
 backend/4096
+backend/build/
+backend/dist/
+.DS_Store
+15
+4096
