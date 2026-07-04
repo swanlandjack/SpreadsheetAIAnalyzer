@@ -1,7 +1,7 @@
 {
   "name": "excel-ai-analyzer",
   "version": "1.0.0",
-  "description": "Local AI-powered Excel and CSV analyzer — 100% private, no internet required",
+  "description": "Local AI-powered Excel and CSV analyzer \u2014 100% private, no internet required",
   "author": "Excel AI Analyzer",
   "main": "main.js",
   "scripts": {
@@ -16,7 +16,7 @@
   "build": {
     "appId": "com.excelai.analyzer",
     "productName": "Excel AI Analyzer",
-    "copyright": "Copyright © 2025",
+    "copyright": "Copyright \u00a9 2025",
     "files": [
       "main.js",
       "preload.js",
@@ -26,32 +26,60 @@
     ],
     "extraResources": [
       {
-        "from": "backend/dist/server",
-        "to": "backend/dist/server",
-        "filter": ["**/*"]
-      },
-      {
         "from": "frontend",
         "to": "frontend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "ollama",
         "to": "ollama",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "backend/dist/server-mac",
+          "to": "backend/dist/server",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "assets/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "backend/dist/server-win",
+          "to": "backend/dist/server",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "nsis": {

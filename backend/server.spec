@@ -17,6 +17,8 @@ import os
 
 block_cipher = None
 
+OUT_NAME = 'server-win' if sys.platform.startswith('win') else 'server-mac'
+
 a = Analysis(
     ['server.py'],
     pathex=[],
@@ -36,6 +38,12 @@ a = Analysis(
         'jinja2',
         'jinja2.ext',
         'click',
+        'eparse',
+        'eparse.core',
+        'eparse.interfaces',
+        'peewee',
+        'lxml',
+        'lxml.etree',
 
         # Pandas engines
         'pandas',
@@ -103,6 +111,8 @@ a = Analysis(
     excludes=[
         # Things we definitely do not need — reduces binary size
         'tkinter',
+        'psycopg2',
+        'psycopg2-binary',
         'matplotlib',
         'scipy',
         'sklearn',
@@ -151,5 +161,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='server',     # output folder name: dist/server/
+    name=OUT_NAME,
 )

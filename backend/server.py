@@ -1,9 +1,9 @@
 """
 Excel AI Analyzer — Python Backend
-Uses Flask + Pandas + Ollama to analyze uploaded Excel/CSV files.
+Uses Flask + Pandas + eparse + Ollama to analyze uploaded Excel/CSV files.
 
 Install:
-    pip install flask flask-cors pandas openpyxl xlrd requests numpy
+    pip install flask flask-cors pandas openpyxl xlrd requests numpy eparse
 
 Run:
     python server.py
@@ -11,13 +11,42 @@ Run:
 Ollama must be running:
     ollama serve
     ollama pull qwen2.5
+
+------------------------------------------------------------------------------
+WHAT CHANGED (eparse integration)
+------------------------------------------------------------------------------
+The old pipeline read each sheet with a single `pandas.read_excel`, assuming ONE
+flat table with headers in row 1. Real finance workbooks break that (multiple
+tables per sheet, KPI cards, headers not in row 1, side-by-side tables).
+
+New parse layer for .xlsx/.xlsm:
+    workbook
+      -> eparse: detect ALL tables per sheet (region detection)
+      -> per table: promote eparse's header row -> clean_dataframe -> text
+      -> pandas fallback for any sheet eparse finds no table in (nothing dropped)
+
+Each detected table becomes one addressable "region", keyed by a LABEL that
+always carries its sheet name:
+    * one table on a sheet   -> label = sheet name          (old behaviour kept)
+    * many tables on a sheet -> label = "Sheet · Header"     (deduped with @anchor)
+
+.csv and legacy .xls keep the original flat pandas path.
+
+Statement guard: financial statements (Income Statement / Balance Sheet / etc.)
+stack line items together with their subtotals and grand totals in one column,
+so summing the column double-counts (e.g. a 267,000 Total Assets column sums to
+1,678,000). Such tables are detected and their misleading column sums/averages
+are SUPPRESSED in the text sent to the model; instead the full labelled rows are
+shown for row-lookup.
 """
 
 import io
 import json
 import os
 import re
+import tempfile
 import traceback
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -32,71 +61,177 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+# eparse prints nothing critical; silence noisy pandas date-inference warnings
+warnings.filterwarnings("ignore", message="Could not infer format")
+
 app = Flask(__name__)
 CORS(app)
 
 # ── In-memory store ────────────────────────────────────────────────────────────
-# { file_id: { id, name, sheets: {name: df}, texts: {name: str} } }
+# { file_id: { id, name, sheets: {label: df}, texts: {label: str}, regions: [meta] } }
+# NOTE: "sheets"/"texts" are now keyed by REGION LABEL (which embeds the sheet
+# name). For simple one-table-per-sheet files the label IS the sheet name, so all
+# existing routes behave identically.
 uploaded_files: dict = {}
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-DEFAULT_MODEL   = os.getenv("OLLAMA_MODEL",   "qwen2.5")
+DEFAULT_MODEL   = os.getenv("OLLAMA_MODEL", "qwen3:4b-instruct")
 
-MAX_SAMPLE_ROWS = 15    # rows shown in the data sample sent to Ollama (small = fast CPU prefill; aggregates come from COLUMN STATISTICS which cover ALL rows)
-MAX_COLS        = 30    # trim very wide sheets
+MAX_SAMPLE_ROWS      = 15   # rows shown for a FLAT table (small = fast CPU prefill; aggregates come from COLUMN STATISTICS which cover ALL rows)
+STATEMENT_MAX_ROWS   = 60   # statements are row-lookup; show more rows, no column sums
+MAX_COLS             = 30   # trim very wide sheets
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  STEP 1 — READ  (upload bytes >> dict of DataFrames)
+#  STEP 1 — READ  (upload bytes >> list of table REGIONS)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+#  A "region" is one detected table:
+#     { sheet, anchor, header, df, source, label? }
+#  `label` is assigned by label_regions() once all regions for a file are known.
 
-def read_excel_bytes(raw: bytes, filename: str) -> dict:
+def _promote_header(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Read raw bytes from an Excel/CSV upload.
-    Returns { sheet_name: pd.DataFrame }
+    eparse returns a DataFrame with POSITIONAL integer columns (1,2,3…) and the
+    real header living in row 0. Promote that first row to be the column names so
+    the rest of the pipeline (clean_dataframe / dataframe_to_text) works unchanged.
+    """
+    if df.empty:
+        return df
+    header = [str(v) for v in df.iloc[0].values]
+    out = df.iloc[1:].copy()
+    out.columns = header
+    return out.reset_index(drop=True)
 
-    Handles:
-      .xlsx / .xlsm  >> openpyxl
-      .xls           >> xlrd  (legacy binary format)
-      .csv           >> auto-detects encoding
+
+def _pandas_sheet_df(path: str, sheet_name) -> pd.DataFrame:
+    return pd.read_excel(
+        path, sheet_name=sheet_name, engine="openpyxl",
+        na_values=["", "N/A", "NA", "n/a", "#N/A"],
+    )
+
+
+def _regions_from_xlsx(path: str) -> list:
+    """
+    eparse multi-table crawl of an .xlsx/.xlsm file, grouped by sheet, with a
+    pandas fallback for any sheet eparse finds no table in (so nothing is lost).
+    """
+    import openpyxl
+
+    regions = []
+    seen_sheets = set()
+
+    # 1) eparse — every detected table across every sheet
+    try:
+        from eparse.core import get_df_from_file
+        for df, anchor, header, sheet in get_df_from_file(path):
+            promoted = _promote_header(df)
+            if promoted.empty:
+                continue
+            seen_sheets.add(sheet)
+            regions.append({
+                "sheet":  sheet,
+                "anchor": str(anchor),
+                "header": str(header),
+                "df":     promoted,
+                "source": "eparse",
+            })
+    except Exception:
+        # eparse failed entirely — fall through; the pandas pass below covers all sheets
+        print("  [eparse] extraction failed, falling back to pandas per-sheet")
+        traceback.print_exc()
+
+    # 2) pandas fallback for sheets eparse skipped (e.g. KPI-cards-only sheets)
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        sheet_names = list(wb.sheetnames)
+        wb.close()
+    except Exception:
+        sheet_names = []
+
+    for name in sheet_names:
+        if name in seen_sheets:
+            continue
+        try:
+            df = _pandas_sheet_df(path, name)
+            if not df.dropna(how="all").empty:
+                regions.append({
+                    "sheet":  name,
+                    "anchor": "A1",
+                    "header": "",
+                    "df":     df,
+                    "source": "pandas-fallback",
+                })
+        except Exception:
+            print(f"  [fallback] could not read sheet {name!r}")
+
+    return regions
+
+
+def extract_regions(raw: bytes, filename: str) -> list:
+    """
+    Turn an upload into a list of labelled table regions.
+
+      .csv          -> one flat region ("Data")            [pandas]
+      .xls          -> one flat region per sheet           [pandas, legacy engine]
+      .xlsx / .xlsm -> eparse multi-table + pandas fallback [region detection]
+
+    Returns regions each carrying a unique `label` that embeds the sheet name.
     """
     ext = filename.rsplit(".", 1)[-1].lower()
-    buf = io.BytesIO(raw)
-    sheets = {}
+    regions = []
 
     # ── CSV ──────────────────────────────────────────────────────────────────
     if ext == "csv":
+        buf = io.BytesIO(raw)
         for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
             try:
                 buf.seek(0)
                 df = pd.read_csv(buf, encoding=enc, on_bad_lines="skip",
                                  low_memory=False)
-                sheets["Data"] = df
+                regions.append({"sheet": "Data", "anchor": "A1", "header": "",
+                                "df": df, "source": "pandas"})
                 print(f"  [CSV] encoding={enc}  rows={len(df)}")
                 break
             except (UnicodeDecodeError, Exception):
                 continue
-        if not sheets:
+        if not regions:
             raise ValueError("Could not decode CSV with any common encoding.")
 
-    # ── XLS (legacy binary) ──────────────────────────────────────────────────
+    # ── XLS (legacy binary) — keep the simple pandas path ────────────────────
     elif ext == "xls":
-        buf.seek(0)
-        xl = pd.ExcelFile(buf, engine="xlrd")
+        xl = pd.ExcelFile(io.BytesIO(raw), engine="xlrd")
         for name in xl.sheet_names:
             df = xl.parse(name, na_values=["", "N/A", "NA", "n/a", "#N/A"])
-            sheets[name] = df
+            regions.append({"sheet": name, "anchor": "A1", "header": "",
+                            "df": df, "source": "pandas"})
         print(f"  [XLS]  sheets={xl.sheet_names}")
 
-    # ── XLSX / XLSM ──────────────────────────────────────────────────────────
+    # ── XLSX / XLSM — eparse multi-table ─────────────────────────────────────
     elif ext in ("xlsx", "xlsm"):
-        buf.seek(0)
-        xl = pd.ExcelFile(buf, engine="openpyxl")
-        for name in xl.sheet_names:
-            df = xl.parse(name, na_values=["", "N/A", "NA", "n/a", "#N/A"])
-            sheets[name] = df
-        print(f"  [XLSX] sheets={xl.sheet_names}")
+        # eparse reads from a path, so spool the upload to a temp file
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+            tmp.write(raw)
+            tmp_path = tmp.name
+        try:
+            regions = _regions_from_xlsx(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        # last-ditch: if nothing at all was found, read every sheet flat
+        if not regions:
+            xl = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+            for name in xl.sheet_names:
+                df = xl.parse(name, na_values=["", "N/A", "NA", "n/a", "#N/A"])
+                regions.append({"sheet": name, "anchor": "A1", "header": "",
+                                "df": df, "source": "pandas-fallback"})
+        srcs = {}
+        for r in regions:
+            srcs[r["source"]] = srcs.get(r["source"], 0) + 1
+        print(f"  [XLSX] tables={len(regions)}  by_source={srcs}")
 
     else:
         raise ValueError(
@@ -104,12 +239,77 @@ def read_excel_bytes(raw: bytes, filename: str) -> dict:
             "(supported: .xlsx  .xls  .xlsm  .csv)"
         )
 
-    return sheets
+    return label_regions(regions)
+
+
+def label_regions(regions: list) -> list:
+    """
+    Assign each region a unique display label that always embeds its sheet name:
+      * exactly one table on a sheet  -> label = sheet name (old behaviour)
+      * multiple tables on a sheet    -> label = "Sheet · Header"
+                                         (fall back to "@anchor" on collision)
+    """
+    by_sheet = {}
+    for r in regions:
+        by_sheet.setdefault(r["sheet"], []).append(r)
+
+    used = set()
+    for sheet, rs in by_sheet.items():
+        if len(rs) == 1:
+            rs[0]["label"] = _uniquify(sheet, used)
+        else:
+            for r in rs:
+                header = r.get("header", "").strip()
+                base = f"{sheet} \u00b7 {header}".rstrip(" \u00b7") if header else sheet
+                if base in used:
+                    base = f"{base} @{r['anchor']}"
+                r["label"] = _uniquify(base, used)
+    return regions
+
+
+def _uniquify(label: str, used: set) -> str:
+    lbl = label
+    i = 2
+    while lbl in used:
+        lbl = f"{label} ({i})"
+        i += 1
+    used.add(lbl)
+    return lbl
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  STEP 2 — CLEAN  (DataFrame >> tidy DataFrame)
+#  STEP 1.5 — CLASSIFY TABLE SHAPE  (flat vs. hierarchical statement)
 # ══════════════════════════════════════════════════════════════════════════════
+
+_YEAR_RE  = re.compile(r"^(19|20)\d{2}(\.0)?$")
+_TOTAL_RE = re.compile(r"(?i)\b(?:total|subtotal|net\s|gross\s)")
+
+
+def detect_table_shape(df: pd.DataFrame) -> str:
+    """
+    'statement' = hierarchical (line items + subtotals stacked; do NOT sum).
+    'flat'      = ordinary record list -> safe to aggregate.
+    TIGHTENED: a lone Total/Net/Gross row is not enough (a holdings list often
+    has a 'Per cent of portfolio in top 10' footer). Real statements are wide:
+    require year/period columns, or a Total-row WITH >=3 numeric columns.
+    """
+    if df.shape[0] < 2 or df.shape[1] < 2:
+        return "flat"
+    num = df.select_dtypes(include="number")
+    n_numeric = num.shape[1]
+    year_cols = sum(1 for c in df.columns if _YEAR_RE.match(str(c).strip()))
+    if year_cols >= 2:
+        return "statement"
+    first_col = df.iloc[:, 0].astype(str)
+    has_total_row = bool(first_col.str.contains(_TOTAL_RE, regex=True).any())
+    if has_total_row and n_numeric >= 3:
+        return "statement"
+    if n_numeric >= 2:
+        allnan = int(num.isna().all(axis=1).sum())
+        labelled = int(first_col.str.len().gt(0).sum())
+        if allnan >= 1 and labelled > allnan:
+            return "statement"
+    return "flat"
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -133,7 +333,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         c = re.sub(r"\s+", " ", c)
         c = re.sub(r"[^\w\s\-\(\)\[\]\/\%\#\$\.]", "_", c)
         c = c.strip("_")
-        if not c or c.lower().startswith("unnamed"):
+        if not c or c.lower().startswith("unnamed") or c.lower() == "nan":
             c = f"col_{len(new_cols) + 1}"
         if c in seen:
             seen[c] += 1
@@ -143,14 +343,42 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         new_cols.append(c)
     df.columns = new_cols
 
-    # 4. Try to parse date-like string columns
-    for col in df.select_dtypes(include=["object"]).columns:
-        sample = df[col].dropna().head(20)
+    # 4. Coerce object columns to their best type: numeric > datetime > text.
+    #    Order matters. eparse hands numeric columns back as `object` (the header
+    #    row forced object dtype), and pd.to_datetime() would read a bare int like
+    #    50 as epoch-nanoseconds -> 1970-01-01. Numeric-first prevents that; only
+    #    genuine datetime OBJECTS or date-looking STRINGS are parsed as dates.
+    import datetime as _dt
+
+    def _is_dateish(v):
+        return isinstance(v, (_dt.datetime, _dt.date, pd.Timestamp))
+
+    for col in df.columns:
+        _s = df[col]
+        if (pd.api.types.is_numeric_dtype(_s)
+                or pd.api.types.is_datetime64_any_dtype(_s)
+                or pd.api.types.is_bool_dtype(_s)):
+            continue
+        s      = df[col]
+        sample = s.dropna()
         if sample.empty:
             continue
-        parsed = pd.to_datetime(sample, errors="coerce")
-        if parsed.notna().mean() > 0.7:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+        head = sample.head(20)
+
+        # (a) already datetime-like objects (common from eparse)
+        if head.map(_is_dateish).mean() > 0.7:
+            df[col] = pd.to_datetime(s, errors="coerce")
+            continue
+
+        # (b) numeric? (do this BEFORE any date parsing)
+        if pd.to_numeric(sample, errors="coerce").notna().mean() > 0.7:
+            df[col] = pd.to_numeric(s, errors="coerce")
+            continue
+
+        # (c) date-like STRINGS only (never bare numbers)
+        if head.map(lambda v: isinstance(v, str)).mean() > 0.7:
+            if pd.to_datetime(sample, errors="coerce").notna().mean() > 0.7:
+                df[col] = pd.to_datetime(s, errors="coerce")
 
     # 5. Infer better dtypes
     df = df.infer_objects()
@@ -202,6 +430,15 @@ def numeric_stats_line(series: pd.Series) -> str:
     return "    " + ",  ".join(parts)
 
 
+def numeric_range_line(series: pd.Series) -> str:
+    """Statement-safe: min/max only, NO sum/avg (they double-count subtotals)."""
+    s = series.dropna()
+    if s.empty:
+        return "    (all values blank)"
+    return (f"    min={fmt_num(s.min())},  max={fmt_num(s.max())}"
+            f"   [sum/avg omitted — column mixes line items with subtotals]")
+
+
 def date_stats_line(series: pd.Series) -> str:
     s = series.dropna()
     if s.empty:
@@ -219,49 +456,68 @@ def text_stats_line(series: pd.Series) -> str:
     return f"    {n_unique} unique values,  blanks={n_null},  top: [{top_str}]"
 
 
-def dataframe_to_text(df: pd.DataFrame, sheet_name: str) -> str:
+def dataframe_to_text(df: pd.DataFrame, label: str,
+                      sheet_name: str = None, is_statement: bool = False) -> str:
     """
-    Convert a cleaned DataFrame to a structured plain-text document.
+    Convert a cleaned DataFrame (one table region) to a structured plain-text
+    document for Ollama.
 
     Layout:
-        SHEET OVERVIEW       — row/col counts, column list
-        COLUMN STATISTICS    — type + full-dataset stats per column
-        DATA SAMPLE          — aligned text table (first MAX_SAMPLE_ROWS rows)
+        TABLE OVERVIEW       — label, source sheet, row/col counts, columns
+        COLUMN STATISTICS    — type + full-dataset stats  (FLAT tables)
+          or COLUMN NOTES    — min/max only, no sums      (STATEMENT tables)
+        DATA SAMPLE          — first N rows                (FLAT: N=15)
+          or FULL STATEMENT  — up to 60 rows for row-lookup (STATEMENT)
     """
     lines = []
     n_rows, n_cols = df.shape
-    is_truncated   = n_rows > MAX_SAMPLE_ROWS
+    cap          = STATEMENT_MAX_ROWS if is_statement else MAX_SAMPLE_ROWS
+    is_truncated = n_rows > cap
 
     # ── Overview ──────────────────────────────────────────────────────────────
     lines.append("=" * 68)
-    lines.append(f"SHEET: {sheet_name}")
+    lines.append(f"TABLE: {label}")
+    if sheet_name:
+        lines.append(f"Source sheet: {sheet_name}")
+    if is_statement:
+        lines.append("TYPE: financial statement — this column layout stacks line "
+                     "items together with their subtotals and totals. Do NOT sum a "
+                     "column; read the specific labelled row (e.g. 'Total Assets').")
     lines.append("=" * 68)
     lines.append(f"Total rows    : {n_rows:,}")
     lines.append(f"Total columns : {n_cols}")
-    lines.append(f"Columns       : {', '.join(df.columns.tolist())}")
+    lines.append(f"Columns       : {', '.join(map(str, df.columns.tolist()))}")
     lines.append("")
 
-    # ── Column statistics (full dataset) ─────────────────────────────────────
+    # ── Column statistics / notes ─────────────────────────────────────────────
     lines.append("-" * 68)
-    lines.append("COLUMN STATISTICS  (computed on ALL rows)")
+    if is_statement:
+        lines.append("COLUMN NOTES  (statement — do NOT sum columns; read labelled rows)")
+    else:
+        lines.append("COLUMN STATISTICS  (computed on ALL rows)")
     lines.append("-" * 68)
     for col in df.columns:
         series = df[col]
-        label  = dtype_label(series)
-        lines.append(f"  [{label}]  {col}")
+        lines.append(f"  [{dtype_label(series)}]  {col}")
         if pd.api.types.is_numeric_dtype(series):
-            lines.append(numeric_stats_line(series))
+            lines.append(numeric_range_line(series) if is_statement
+                         else numeric_stats_line(series))
         elif pd.api.types.is_datetime64_any_dtype(series):
             lines.append(date_stats_line(series))
         else:
             lines.append(text_stats_line(series))
     lines.append("")
 
-    # ── Data sample ───────────────────────────────────────────────────────────
+    # ── Data sample / full statement ──────────────────────────────────────────
     lines.append("-" * 68)
-    if is_truncated:
+    if is_statement:
+        if is_truncated:
+            lines.append(f"STATEMENT ROWS  (first {cap} of {n_rows:,} — read specific rows for values)")
+        else:
+            lines.append(f"FULL STATEMENT  ({n_rows} rows — read the specific labelled row for each value)")
+    elif is_truncated:
         lines.append(
-            f"DATA SAMPLE  (first {MAX_SAMPLE_ROWS} of {n_rows:,} rows shown)\n"
+            f"DATA SAMPLE  (first {cap} of {n_rows:,} rows shown)\n"
             f"NOTE: Use the statistics above for totals/averages — "
             f"they cover ALL {n_rows:,} rows."
         )
@@ -269,7 +525,7 @@ def dataframe_to_text(df: pd.DataFrame, sheet_name: str) -> str:
         lines.append(f"FULL DATA  ({n_rows} rows)")
     lines.append("-" * 68)
 
-    sample = df.head(MAX_SAMPLE_ROWS).copy()
+    sample = df.head(cap).copy()
 
     # Format datetime cols as readable strings
     for col in sample.columns:
@@ -297,15 +553,10 @@ def dataframe_to_text(df: pd.DataFrame, sheet_name: str) -> str:
         lines.append(row_line([row[c] for c in sample.columns]))
 
     if is_truncated:
-        lines.append(f"\n  ... ({n_rows - MAX_SAMPLE_ROWS:,} more rows not shown)")
+        lines.append(f"\n  ... ({n_rows - cap:,} more rows not shown)")
 
     lines.append("=" * 68)
     return "\n".join(lines)
-
-
-def build_file_texts(sheets: dict) -> dict:
-    """Convert all cleaned sheets to text. Returns { sheet_name: text }"""
-    return {name: dataframe_to_text(df, name) for name, df in sheets.items()}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -315,38 +566,121 @@ def build_file_texts(sheets: dict) -> dict:
 SYSTEM_PROMPT = """\
 You are an expert data analyst assistant.
 You are analyzing a spreadsheet called "{filename}".
-Sheets available: {sheet_list}
+Tables available (each labelled by its source sheet): {sheet_list}
 
 Each data block you receive contains:
-  1. SHEET OVERVIEW  — total rows and column names
-  2. COLUMN STATISTICS  — computed from the FULL dataset (use these for aggregates)
-  3. DATA SAMPLE  — first {sample_rows} rows as a text table
+  1. TABLE OVERVIEW  — source sheet, total rows, column names
+  2. COLUMN STATISTICS or COLUMN NOTES  — per-column type and figures
+  3. DATA SAMPLE / STATEMENT ROWS  — rows as a text table
 
 Rules:
-  • Totals / averages / min / max >> always read from COLUMN STATISTICS.
-  • Row lookups and pattern questions >> use the DATA SAMPLE.
+  • Totals / averages / min / max on a FLAT table >> read from COLUMN STATISTICS.
+  • For a table marked TYPE: financial statement >> NEVER sum a column. The column
+    already contains subtotals and totals mixed with line items. Read the specific
+    labelled row instead (e.g. "Total Assets", "Net Income").
+  • Row lookups and pattern questions >> use the data rows shown.
+  • Always state which table/sheet an answer came from.
   • If data is truncated, say so and use stats for aggregate answers.
   • Use markdown tables when comparing multiple values.
   • Show brief workings for any calculations.
   • Never invent data that is not in the provided text.
-  • If a question cannot be answered from the data, say so clearly.\
+  • If a question cannot be answered from the data, say so clearly.{statement_note}\
 """
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTING — pick which table(s) to send based on the question
+# ══════════════════════════════════════════════════════════════════════════════
+
+CTX_CHAR_BUDGET = 9000   # keep concatenated tables within reach of num_ctx=4096
+
+_WHOLE_WB_RE = re.compile(
+    r"\b(each|all|every|per)\s+(sheet|tab|table|fund)s?\b|\bevery\s+one\b|"
+    r"\bwhole\s+(workbook|file|spreadsheet)\b|\bsummar(y|ise|ize)\b|\boverview\s+of\b",
+    re.I,
+)
+
+def _norm(s):
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+def route_question(question, regions, selected_label=None):
+    """
+    Decide what data to send.
+      ('catalog', [all labels])  -> compact index of every table (whole-workbook Qs)
+      ('tables',  [labels])      -> full text for named/selected tables
+    Precedence: whole-workbook phrasing > tables named in the question >
+                explicit tab selection > fallback.
+    """
+    q  = question or ""
+    qn = _norm(q)
+
+    if _WHOLE_WB_RE.search(q):
+        return "catalog", [r["label"] for r in regions]
+
+    named = []
+    for r in regions:
+        for cand in (r["label"], r["sheet"]):
+            cn = _norm(cand)
+            if len(cn) >= 4 and cn in qn:
+                named.append(r["label"]); break
+    named = list(dict.fromkeys(named))
+    if named:
+        return "tables", named
+
+    if selected_label:
+        return "tables", [selected_label]
+
+    if len(regions) == 1:
+        return "tables", [regions[0]["label"]]
+    return "catalog", [r["label"] for r in regions]
+
+def build_catalog(regions):
+    lines = ["TABLE CATALOG (each table's label, source sheet, size, type — "
+             "ask about a specific one to see its rows):"]
+    for r in regions:
+        lines.append(f"  - {r['label']}  [sheet={r['sheet']}, "
+                     f"{r['rows']}x{r['cols']}, {r['kind']}]")
+    return "\n".join(lines)
+
+def build_user_msg(texts, regions, sheet, question):
+    """
+    Route the question to the right table(s). `sheet` is the label of the
+    currently-selected tab (may be None). Named tables in the question override it.
+    """
+    mode, labels = route_question(question, regions, sheet)
+
+    if mode == "catalog":
+        block = build_catalog(regions)
+        return (f"DATA (catalog only — name a table to see its rows):\n\n{block}"
+                f"\n\n---\nQUESTION: {question}")
+
+    chosen, total, dropped = [], 0, []
+    for lbl in labels:
+        t = texts.get(lbl, "")
+        if not t:
+            continue
+        if total + len(t) > CTX_CHAR_BUDGET and chosen:
+            dropped.append(lbl); continue
+        chosen.append(t); total += len(t)
+    body = "\n\n".join(chosen) if chosen else "(no matching table found)"
+    if dropped:
+        body += (f"\n\n[NOTE: {len(dropped)} more table(s) omitted for length: "
+                 f"{', '.join(dropped)}. Ask about them individually.]")
+    return f"DATA:\n\n{body}\n\n---\nQUESTION: {question}"
+
+
 def build_system(info: dict) -> str:
+    labels = list(info["sheets"].keys())
+    statements = [m["label"] for m in info.get("regions", []) if m.get("kind") == "statement"]
+    note = ""
+    if statements:
+        note = ("\n  • These tables are financial statements — do not sum their "
+                "columns: " + ", ".join(statements))
     return SYSTEM_PROMPT.format(
         filename=info["name"],
-        sheet_list=", ".join(info["sheets"].keys()),
-        sample_rows=MAX_SAMPLE_ROWS,
+        sheet_list=", ".join(labels),
+        statement_note=note,
     )
-
-
-def build_user_msg(texts: dict, sheet: str, question: str) -> str:
-    if sheet and sheet in texts:
-        data_block = texts[sheet]
-    else:
-        data_block = "\n\n".join(texts.values())
-    return f"DATA:\n\n{data_block}\n\n---\nQUESTION: {question}"
 
 
 def ollama_stream(model: str, system: str, messages: list):
@@ -383,8 +717,9 @@ def upload():
     """
     POST multipart/form-data  field: 'file'
 
-    Pipeline: read_excel_bytes >> clean_dataframe >> dataframe_to_text
-    All three representations stored in memory.
+    Pipeline: extract_regions (eparse) >> clean_dataframe >> dataframe_to_text
+    Each detected table becomes an addressable region keyed by a label that
+    embeds its sheet name.
     """
     if "file" not in request.files:
         return jsonify({"error": "No 'file' field in request"}), 400
@@ -395,35 +730,61 @@ def upload():
             continue
         print(f"\n>> Uploading: {f.filename}")
         try:
-            raw    = f.read()
-            sheets = read_excel_bytes(raw, f.filename)
-            clean  = {name: clean_dataframe(df) for name, df in sheets.items()}
-            texts  = build_file_texts(clean)
+            raw     = f.read()
+            regions = extract_regions(raw, f.filename)
+
+            sheets = {}   # label -> cleaned df
+            texts  = {}   # label -> text
+            meta   = []   # per-region metadata (for API + system prompt)
+
+            for r in regions:
+                clean = clean_dataframe(r["df"])
+                if clean.empty:
+                    continue
+                kind  = detect_table_shape(clean)
+                label = r["label"]
+                sheets[label] = clean
+                texts[label]  = dataframe_to_text(
+                    clean, label, sheet_name=r["sheet"],
+                    is_statement=(kind == "statement"),
+                )
+                meta.append({
+                    "label":  label,
+                    "sheet":  r["sheet"],
+                    "kind":   kind,
+                    "source": r["source"],
+                    "anchor": r["anchor"],
+                    "rows":   len(clean),
+                    "cols":   len(clean.columns),
+                })
+
+            if not sheets:
+                results.append({"name": f.filename, "error": "No readable tables found"})
+                continue
 
             # Terminal preview
-            for name, txt in texts.items():
-                preview = txt.split("\n")[:10]
-                print(f"  [TEXT PREVIEW — {name}]")
-                for ln in preview:
-                    print(f"    {ln}")
-                print(f"    ... total {len(txt):,} chars")
+            for m in meta:
+                print(f"  [{m['kind']:9}] {m['label']}  "
+                      f"(sheet={m['sheet']}, {m['rows']}x{m['cols']}, {m['source']})")
 
             file_id = "f{}_{}".format(
                 len(uploaded_files) + 1,
                 re.sub(r"[^a-zA-Z0-9_]", "_", f.filename)
             )
             uploaded_files[file_id] = {
-                "id":     file_id,
-                "name":   f.filename,
-                "sheets": clean,
-                "texts":  texts,
+                "id":      file_id,
+                "name":    f.filename,
+                "sheets":  sheets,
+                "texts":   texts,
+                "regions": meta,
             }
             results.append({
                 "id":      file_id,
                 "name":    f.filename,
-                "sheets":  list(clean.keys()),
-                "rows":    {s: len(df) for s, df in clean.items()},
-                "columns": {s: list(df.columns) for s, df in clean.items()},
+                "sheets":  list(sheets.keys()),                       # labels (frontend tabs)
+                "tables":  meta,                                      # rich structure
+                "rows":    {lbl: len(df) for lbl, df in sheets.items()},
+                "columns": {lbl: list(df.columns) for lbl, df in sheets.items()},
             })
 
         except Exception as e:
@@ -483,7 +844,7 @@ def get_text(file_id):
     Return the exact text that will be sent to Ollama.
     Useful for verifying the conversion is correct.
 
-        GET /text/<file_id>?sheet=Sheet1
+        GET /text/<file_id>?sheet=<label>
     """
     if file_id not in uploaded_files:
         return jsonify({"error": "File not found"}), 404
@@ -498,6 +859,7 @@ def get_text(file_id):
 def chat():
     """
     POST { file_id, question, sheet?, model?, history? }
+    `sheet` is a region label (e.g. "Dashboard · Asset" or "Income Statement").
     Streams Ollama response as plain text.
     """
     body     = request.get_json(force=True)
@@ -516,10 +878,10 @@ def chat():
 
     info     = uploaded_files[file_id]
     system   = build_system(info)
-    user_msg = build_user_msg(info["texts"], sheet, question)
+    user_msg = build_user_msg(info["texts"], info["regions"], sheet, question)
     messages = list(history) + [{"role": "user", "content": user_msg}]
 
-    print(f"\n[CHAT] {info['name']} | sheet={sheet} | model={model}")
+    print(f"\n[CHAT] {info['name']} | table={sheet} | model={model}")
     print(f"       Q: {question[:100]}")
 
     def generate():
@@ -558,12 +920,6 @@ def pull_model():
 
     Streams pull progress back as newline-delimited JSON, forwarded
     directly from Ollama's /api/pull endpoint.
-
-    Each line is one of:
-      {"status":"pulling manifest"}
-      {"status":"downloading ...","completed":N,"total":N}
-      {"status":"success"}
-      {"error":"..."}
     """
     body  = request.get_json(force=True)
     model = (body.get("model") or "").strip()
@@ -636,7 +992,7 @@ def health():
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 60)
-    print("  Excel AI Analyzer — Backend")
+    print("  Excel AI Analyzer — Backend (eparse multi-table)")
     print(f"  Ollama URL    : {OLLAMA_BASE_URL}")
     print(f"  Default model : {DEFAULT_MODEL}")
     print(f"  Server        : http://localhost:3000")
