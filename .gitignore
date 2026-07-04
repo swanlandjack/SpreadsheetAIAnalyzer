@@ -7,4 +7,11 @@ backend/dist/
 *.pkg
 __pycache__/
 *.pyc
-.DS_Store
+.DS_Storebackend/build/
+backend/dist/
+backend/.venv/
+*.bak
+*.bak2
+*.bak3
+backend/15
+backend/4096
