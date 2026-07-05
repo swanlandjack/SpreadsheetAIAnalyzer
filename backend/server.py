@@ -285,30 +285,52 @@ _YEAR_RE  = re.compile(r"^(19|20)\d{2}(\.0)?$")
 _TOTAL_RE = re.compile(r"(?i)\b(?:total|subtotal|net\s|gross\s)")
 
 
+# ── Period-header helpers (place near _YEAR_RE / _TOTAL_RE) ────────────────────
+_MONTHS = {"jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec",
+           "january","february","march","april","june","july","august","september",
+           "october","november","december"}
+_QTR_RE = re.compile(r"^(q[1-4]|[1-4]q|h[12])(\s*\d{2,4})?$", re.I)
+
+def _is_period(col) -> bool:
+    c = str(col).strip()
+    return bool(_YEAR_RE.match(c)) or bool(_QTR_RE.match(c)) or c.lower() in _MONTHS
+
+
 def detect_table_shape(df: pd.DataFrame) -> str:
     """
-    'statement' = hierarchical (line items + subtotals stacked; do NOT sum).
-    'flat'      = ordinary record list -> safe to aggregate.
-    TIGHTENED: a lone Total/Net/Gross row is not enough (a holdings list often
-    has a 'Per cent of portfolio in top 10' footer). Real statements are wide:
-    require year/period columns, or a Total-row WITH >=3 numeric columns.
+    statement = hierarchical financial statement (line items + subtotals/totals
+                stacked in a column) -> do NOT sum columns.
+    flat      = ordinary record list -> safe to aggregate.
+
+    A statement is identified by PERIOD columns (years / quarters / months) as
+    headers, OR explicit section structure (a Total row AND all-NaN section-header
+    rows), OR a single value column with >=2 Total-like rows. Numeric-column COUNT
+    is NOT a trigger: a fund holdings table can have several numeric columns and a
+    'Per cent of portfolio...' footer yet is flat.
     """
     if df.shape[0] < 2 or df.shape[1] < 2:
         return "flat"
-    num = df.select_dtypes(include="number")
-    n_numeric = num.shape[1]
-    year_cols = sum(1 for c in df.columns if _YEAR_RE.match(str(c).strip()))
-    if year_cols >= 2:
+
+    # (a) >=2 period columns -> statement (years / quarters / months matrix)
+    if sum(1 for c in df.columns if _is_period(c)) >= 2:
         return "statement"
+
     first_col = df.iloc[:, 0].astype(str)
-    has_total_row = bool(first_col.str.contains(_TOTAL_RE, regex=True).any())
-    if has_total_row and n_numeric >= 3:
-        return "statement"
-    if n_numeric >= 2:
+    has_total = bool(first_col.str.contains(_TOTAL_RE, regex=True).any())
+    num = df.select_dtypes(include="number")
+
+    # (b) section-structured statement: a Total row AND all-NaN section-header rows
+    if has_total and not num.empty:
         allnan = int(num.isna().all(axis=1).sum())
         labelled = int(first_col.str.len().gt(0).sum())
         if allnan >= 1 and labelled > allnan:
             return "statement"
+
+    # (c) single value column with >=2 Total-like rows (income statement, one period)
+    if num.shape[1] == 1:
+        if int(first_col.str.contains(_TOTAL_RE, regex=True).sum()) >= 2:
+            return "statement"
+
     return "flat"
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
