@@ -98,7 +98,7 @@
     "min_tables": 1,
     "tables": [
       {
-        "note": "does guard fire on month cols? (probably flat now)"
+        "kind": "statement"
       }
     ]
   },
@@ -106,7 +106,7 @@
     "min_tables": 1,
     "tables": [
       {
-        "note": "1 numeric col + Total rows \u2014 currently flat"
+        "kind": "statement"
       }
     ]
   },
