@@ -24,3 +24,4 @@ Samples/test3.xlsx
 Samples/test4.xlsx
 Samples/*.tar.gz
 *.bak4
+*.bak.*

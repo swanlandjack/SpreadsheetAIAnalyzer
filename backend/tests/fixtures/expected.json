@@ -195,5 +195,14 @@
   "28_legacy.xlsx": {
     "min_tables": 1,
     "note": "placeholder for .xls path; supply a real .xls to fully test"
+  },
+  "29_payroll_footnote_total.xlsx": {
+    "min_tables": 1,
+    "tables": [
+      {
+        "kind": "flat",
+        "note": "footnote contains Total; must stay flat"
+      }
+    ]
   }
 }

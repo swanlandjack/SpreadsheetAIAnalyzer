@@ -281,57 +281,48 @@ def _uniquify(label: str, used: set) -> str:
 #  STEP 1.5 — CLASSIFY TABLE SHAPE  (flat vs. hierarchical statement)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_YEAR_RE  = re.compile(r"^(19|20)\d{2}(\.0)?$")
-_TOTAL_RE = re.compile(r"(?i)\b(?:total|subtotal|net\s|gross\s)")
-
-
-# ── Period-header helpers (place near _YEAR_RE / _TOTAL_RE) ────────────────────
+import re
+import pandas as pd
+# Period detection: handle bare years AND common financial variants:
+#   2024 · FY 2024 · FY24 · 2024E · 2024A · Q1 2024 · Jan · etc.
+_YEAR_RE  = re.compile(r"(?i)^(?:fy\s*)?(?:19|20)\d{2}(?:\s*\(?(?:projected|est|actual|budget|e|a|p)\)?)?(?:\.0)?$")
+_FY_SHORT = re.compile(r"(?i)^fy\s?\d{2}$")                     # FY24
+_TOTAL_RE = re.compile(r"(?i)^\s*(?:total|subtotal|net\s|gross\s|operating income|income before)")
 _MONTHS = {"jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec",
            "january","february","march","april","june","july","august","september",
            "october","november","december"}
-_QTR_RE = re.compile(r"^(q[1-4]|[1-4]q|h[12])(\s*\d{2,4})?$", re.I)
+_QTR_RE = re.compile(r"(?i)^(q[1-4]|[1-4]q|h[12])(\s*\d{2,4})?$")
 
 def _is_period(col) -> bool:
     c = str(col).strip()
-    return bool(_YEAR_RE.match(c)) or bool(_QTR_RE.match(c)) or c.lower() in _MONTHS
-
+    return bool(_YEAR_RE.match(c) or _FY_SHORT.match(c) or _QTR_RE.match(c)) or c.lower() in _MONTHS
 
 def detect_table_shape(df: pd.DataFrame) -> str:
-    """
-    statement = hierarchical financial statement (line items + subtotals/totals
-                stacked in a column) -> do NOT sum columns.
-    flat      = ordinary record list -> safe to aggregate.
-
-    A statement is identified by PERIOD columns (years / quarters / months) as
-    headers, OR explicit section structure (a Total row AND all-NaN section-header
-    rows), OR a single value column with >=2 Total-like rows. Numeric-column COUNT
-    is NOT a trigger: a fund holdings table can have several numeric columns and a
-    'Per cent of portfolio...' footer yet is flat.
-    """
     if df.shape[0] < 2 or df.shape[1] < 2:
         return "flat"
-
-    # (a) >=2 period columns -> statement (years / quarters / months matrix)
+    # (a) >=2 period columns (years/FY/quarters/months) -> statement
     if sum(1 for c in df.columns if _is_period(c)) >= 2:
         return "statement"
-
     first_col = df.iloc[:, 0].astype(str)
-    has_total = bool(first_col.str.contains(_TOTAL_RE, regex=True).any())
     num = df.select_dtypes(include="number")
-
-    # (b) section-structured statement: a Total row AND all-NaN section-header rows
-    if has_total and not num.empty:
+    def _real_total_rows():
+        if num.empty: return 0
+        mask = first_col.str.contains(_TOTAL_RE, regex=True)
+        has_num = num.notna().any(axis=1)
+        return int((mask & has_num).sum())
+    rtr = _real_total_rows()
+    # (b) MULTIPLE real subtotal rows -> hierarchical statement (no NaN-section requirement).
+    #     >=2 'Total/Subtotal/Net/Gross/...' lines that carry numbers = a statement.
+    if rtr >= 2:
+        return "statement"
+    # (c) one real total row + all-NaN section-header rows
+    if rtr >= 1 and not num.empty:
         allnan = int(num.isna().all(axis=1).sum())
         labelled = int(first_col.str.len().gt(0).sum())
         if allnan >= 1 and labelled > allnan:
             return "statement"
-
-    # (c) single value column with >=2 Total-like rows (income statement, one period)
-    if num.shape[1] == 1:
-        if int(first_col.str.contains(_TOTAL_RE, regex=True).sum()) >= 2:
-            return "statement"
-
     return "flat"
+
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
