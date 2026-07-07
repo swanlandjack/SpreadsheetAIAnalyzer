@@ -741,28 +741,28 @@ async function streamResponse(q){
       const {done,value}=await reader.read();
       if(done)break;
       const chunk=dec.decode(value,{stream:true});
-      if(chunk.trim()){
-        if(!firstToken){
-          firstToken=true;
-          clearInterval(timerInterval);
-          bubble.innerHTML='';
-          // Show a small "took Xs" badge at top
-          const badge=document.createElement('div');
-          badge.style.cssText='font-family:IBM Plex Mono,monospace;font-size:10px;color:var(--muted);margin-bottom:6px;';
-          badge.textContent=`🤖 ${model}  ·  first token in ${elapsed}s`;
-          bubble.appendChild(badge);
-        }
-        full+=chunk;
-        // Update just the content after the badge
-        let contentDiv=bubble.querySelector('.ai-content');
-        if(!contentDiv){
-          contentDiv=document.createElement('div');
-          contentDiv.className='ai-content';
-          bubble.appendChild(contentDiv);
-        }
-        contentDiv.innerHTML=md(full);
-        msgs.scrollTop=msgs.scrollHeight;
+      if(!chunk)continue;
+      if(!firstToken){
+        if(!chunk.trim())continue;
+        firstToken=true;
+        clearInterval(timerInterval);
+        bubble.innerHTML='';
+        // Show a small "took Xs" badge at top
+        const badge=document.createElement('div');
+        badge.style.cssText='font-family:IBM Plex Mono,monospace;font-size:10px;color:var(--muted);margin-bottom:6px;';
+        badge.textContent=`🤖 ${model}  ·  first token in ${elapsed}s`;
+        bubble.appendChild(badge);
       }
+      full+=chunk;
+      // Update just the content after the badge
+      let contentDiv=bubble.querySelector('.ai-content');
+      if(!contentDiv){
+        contentDiv=document.createElement('div');
+        contentDiv.className='ai-content';
+        bubble.appendChild(contentDiv);
+      }
+      contentDiv.innerHTML=md(full);
+      msgs.scrollTop=msgs.scrollHeight;
     }
 
     history.push({role:'assistant',content:full});
@@ -818,6 +818,7 @@ function md(s){
   h=h.replace(/\n/g,'<br>');
   h=h.replace(/(<\/(?:h[123]|pre|table|ul)>)<br>/g,'$1');
   h=h.replace(/<br>(<(?:ul|table)>)/g,'$1');
+  h=h.replace(/<\/li><br>/g,'</li>');
   return h;
 }
 
